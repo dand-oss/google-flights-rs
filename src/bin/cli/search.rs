@@ -1,10 +1,25 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::Parser;
-use gflights::parsers::common::{AirlineFilter, SortOrder, StopoverDuration};
+use gflights::parsers::common::{AirlineFilter, FlightTimes, SortOrder, StopoverDuration};
 use gflights::requests::api::ApiClient;
 
 use super::{build_config, CommonArgs, OutputFormat};
 use gflights::requests::config::Config;
+
+/// Parse an `H-H` 24-hour-clock time window into a from-to hour pair.
+fn parse_time_window(s: &str) -> Result<(u32, u32)> {
+    let (from, to) = s
+        .split_once('-')
+        .ok_or_else(|| anyhow!("time window must be H-H in 24h format, e.g. 6-20: {s}"))?;
+    let from: u32 = from.trim().parse()?;
+    let to: u32 = to.trim().parse()?;
+    if from > 23 || to > 23 || from > to {
+        return Err(anyhow!(
+            "time window hours must be 0-23 with FROM <= TO: {s}"
+        ));
+    }
+    Ok((from, to))
+}
 
 /// Arguments for the `search` subcommand.
 #[derive(Parser, Debug)]
@@ -54,6 +69,34 @@ pub struct SearchArgs {
     /// Exclude basic-economy fares from results.
     #[arg(long)]
     pub exclude_basic: bool,
+
+    /// Outbound departure time window in 24h format, for example 6-20.
+    #[arg(long)]
+    pub time: Option<String>,
+
+    /// Outbound arrival time window in 24h format, for example 8-22.
+    #[arg(long)]
+    pub arr_time: Option<String>,
+
+    /// Return-leg departure time window in 24h format. Round trips only.
+    #[arg(long)]
+    pub ret_time: Option<String>,
+
+    /// Return-leg arrival time window in 24h format. Round trips only.
+    #[arg(long)]
+    pub ret_arr_time: Option<String>,
+
+    /// Number of checked bags, 0 to 2, to include in the displayed price.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=2))]
+    pub bags: Option<u8>,
+
+    /// Number of carry-on bags, 0 to 2, to include in the displayed price.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=2))]
+    pub carry_on: Option<u8>,
+
+    /// Maximum total price in the result currency.
+    #[arg(long)]
+    pub max_price: Option<i32>,
 }
 
 pub async fn cmd_search(args: SearchArgs, client: &ApiClient) -> Result<()> {
@@ -73,6 +116,39 @@ pub async fn cmd_search(args: SearchArgs, client: &ApiClient) -> Result<()> {
         config.stopover_max = StopoverDuration::Minutes(mins);
     }
     config.exclude_basic_economy = args.exclude_basic;
+
+    // Time-of-day windows. FlightTimes treats 0 as "no bound", which matches
+    // the "whole day" default when only one side of a window is given.
+    if args.time.is_some() || args.arr_time.is_some() {
+        let (dep_from, dep_to) = args.time.as_deref().map_or(Ok((0, 0)), parse_time_window)?;
+        let (arr_from, arr_to) = args
+            .arr_time
+            .as_deref()
+            .map_or(Ok((0, 0)), parse_time_window)?;
+        config.departing_times = FlightTimes::new(dep_from, dep_to, arr_from, arr_to);
+    }
+    if args.ret_time.is_some() || args.ret_arr_time.is_some() {
+        if args.common.r#return.is_none() {
+            return Err(anyhow!(
+                "--ret-time/--ret-arr-time require a round trip via --return"
+            ));
+        }
+        let (dep_from, dep_to) = args
+            .ret_time
+            .as_deref()
+            .map_or(Ok((0, 0)), parse_time_window)?;
+        let (arr_from, arr_to) = args
+            .ret_arr_time
+            .as_deref()
+            .map_or(Ok((0, 0)), parse_time_window)?;
+        config.return_times = FlightTimes::new(dep_from, dep_to, arr_from, arr_to);
+    }
+
+    // Baggage-inclusive pricing and the price cap.
+    if args.bags.is_some() || args.carry_on.is_some() {
+        config.baggage = Some((args.carry_on.unwrap_or(0), args.bags.unwrap_or(0)));
+    }
+    config.max_price = args.max_price;
 
     let results = client.request_flights(&config).await?;
     // Strict "via": Google's other_flights container leaks non-stops that skip
