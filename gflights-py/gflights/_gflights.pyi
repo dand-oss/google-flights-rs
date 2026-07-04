@@ -23,6 +23,14 @@ class LegInfo:
     departure_date: str
     arrival_date: str
     duration_minutes: Optional[int]
+    aircraft: Optional[str]
+    legroom: Optional[str]
+    overnight: Optional[bool]
+    co2_grams: Optional[int]
+    wifi: Optional[bool]
+    power: Optional[bool]
+    on_demand_video: Optional[bool]
+    legroom_rating: Optional[int]
     def __repr__(self) -> str: ...
     def to_dict(self) -> dict: ...
 
@@ -48,6 +56,8 @@ class FlightResult:
     stops: int
     price: Optional[int]
     booking_token: str
+    self_transfer: Optional[bool]
+    mixed_cabin: Optional[bool]
     @property
     def legs(self) -> list[LegInfo]: ...
     @property
@@ -184,6 +194,7 @@ class _Client:
         max_price: Optional[int] = ...,
         carry_on: int = ...,
         checked_bags: int = ...,
+        exclude_basic_economy: bool = ...,
     ) -> list[FlightResult]:
         """Search for flights. Returns a coroutine."""
         ...
