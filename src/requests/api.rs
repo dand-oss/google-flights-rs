@@ -1260,6 +1260,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::const_is_empty)]
     fn user_agent_pool_is_nonempty_and_valid_headers() {
         assert!(!USER_AGENTS.is_empty());
         for ua in USER_AGENTS {
