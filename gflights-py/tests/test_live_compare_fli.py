@@ -7,7 +7,8 @@ slot regresses — trip type, sort, stops — prices or itineraries diverge
 far beyond normal cache jitter.
 
 Requirements: RUN_LIVE_TESTS set to a non-empty value AND the fli CLI on
-PATH. Skipped otherwise, so offline CI is unaffected.
+PATH. Install fli with ``uv pip install --group live`` (the ``live`` dependency
+group in pyproject.toml). Skipped otherwise, so offline CI is unaffected.
 """
 
 import datetime

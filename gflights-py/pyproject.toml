@@ -21,6 +21,12 @@ classifiers = [
 
 [dependency-groups]
 dev = ["pytest>=9.0.3", "pytest-asyncio>=1.4.0", "maturin>=1.4,<2.0"]
+# Live cross-validation dep: the PyPI package `flights` (punitarani/fli) provides
+# the `fli` CLI that tests/test_live_compare_fli.py shells out to. Install with
+# `uv pip install --group live` (or `uv sync --group live`).
+# `click` is listed explicitly because flights 0.9.0's CLI imports it but omits
+# it from its own dependencies, so `fli` fails to start without it.
+live = ["flights>=0.9", "click>=8"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
