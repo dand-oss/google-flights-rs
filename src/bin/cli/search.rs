@@ -80,9 +80,18 @@ pub async fn cmd_search(args: SearchArgs, client: &ApiClient) -> Result<()> {
     let mut flights = results.get_all_flights_via(&config.connecting_airports);
 
     // Client-side sort — guarantees the requested order regardless of what
-    // Google returns.  `Best` keeps Google's own ordering.
+    // Google returns.  `Best` and `TopFlights` keep Google's own ordering.
     match args.sort {
-        SortOrder::Best => {}
+        SortOrder::Best | SortOrder::TopFlights => {}
+        SortOrder::Emissions => {
+            flights.sort_by_key(|f| {
+                f.itinerary
+                    .emissions
+                    .as_ref()
+                    .and_then(|e| e.co2_this_flight_g)
+                    .unwrap_or(i64::MAX)
+            });
+        }
         SortOrder::Price => {
             flights.sort_by_key(|f| {
                 f.itinerary_cost
