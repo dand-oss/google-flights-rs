@@ -56,3 +56,29 @@ def test_currency_enum_members_are_iso_strings():
 def test_currency_enum_accepts_client_construction():
     c = gflights.Client(currency=gflights.Currency.USD)
     assert repr(c) == "Client()"
+
+
+def test_leg_info_exposes_seat_and_amenity_attributes():
+    for attr in (
+        "aircraft",
+        "legroom",
+        "overnight",
+        "co2_grams",
+        "wifi",
+        "power",
+        "on_demand_video",
+        "legroom_rating",
+    ):
+        assert hasattr(gflights.LegInfo, attr), f"LegInfo missing .{attr}"
+
+
+def test_flight_result_exposes_quality_flags():
+    for attr in ("self_transfer", "mixed_cabin"):
+        assert hasattr(gflights.FlightResult, attr), f"FlightResult missing .{attr}"
+
+
+def test_search_filters_exclude_basic_economy_defaults_off():
+    f = gflights.SearchFilters()
+    assert f.exclude_basic_economy is False
+    f2 = gflights.SearchFilters(exclude_basic_economy=True)
+    assert f2.exclude_basic_economy is True
