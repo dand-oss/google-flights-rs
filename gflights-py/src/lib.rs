@@ -77,13 +77,15 @@ fn parse_travel_class(s: &str) -> PyResult<TravelClass> {
 
 fn parse_sort_order(s: &str) -> PyResult<SortOrder> {
     match s.to_lowercase().as_str() {
+        "top-flights" | "top" => Ok(SortOrder::TopFlights),
         "best" => Ok(SortOrder::Best),
         "price" | "cheapest" => Ok(SortOrder::Price),
         "duration" | "shortest" => Ok(SortOrder::Duration),
         "departure" | "departure-time" | "dep" => Ok(SortOrder::DepartureTime),
         "arrival" | "arrival-time" | "arr" => Ok(SortOrder::ArrivalTime),
+        "emissions" | "co2" => Ok(SortOrder::Emissions),
         _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "unknown sort order {s:?} — use 'best', 'price', 'duration', 'departure-time', or 'arrival-time'"
+            "unknown sort order {s:?} — use 'top-flights', 'best', 'price', 'duration', 'departure-time', 'arrival-time', or 'emissions'"
         ))),
     }
 }
@@ -177,6 +179,22 @@ pub struct LegInfo {
     pub arrival_date: String,
     /// Duration of this individual leg in minutes, or `None` if not provided.
     pub duration_minutes: Option<i32>,
+    /// Aircraft model, for example `"Airbus A321neo"`, or `None`.
+    pub aircraft: Option<String>,
+    /// Legroom description, for example `"76 cm"`, or `None`.
+    pub legroom: Option<String>,
+    /// `True` when the leg arrives on a later calendar day, or `None`.
+    pub overnight: Option<bool>,
+    /// CO₂ emissions for this leg in grams, or `None`.
+    pub co2_grams: Option<i64>,
+    /// Wi-Fi availability, or `None` when Google published no signal.
+    pub wifi: Option<bool>,
+    /// Power-outlet availability, or `None` when Google published no signal.
+    pub power: Option<bool>,
+    /// On-demand video availability, or `None` when Google published no signal.
+    pub on_demand_video: Option<bool>,
+    /// Integer legroom rating — values 2 or 3 observed — or `None`.
+    pub legroom_rating: Option<i64>,
 }
 
 py_data_class! {
@@ -199,6 +217,14 @@ py_data_class! {
         "departure_date" => |s| &s.departure_date,
         "arrival_date" => |s| &s.arrival_date,
         "duration_minutes" => |s| s.duration_minutes,
+        "aircraft" => |s| &s.aircraft,
+        "legroom" => |s| &s.legroom,
+        "overnight" => |s| s.overnight,
+        "co2_grams" => |s| s.co2_grams,
+        "wifi" => |s| s.wifi,
+        "power" => |s| s.power,
+        "on_demand_video" => |s| s.on_demand_video,
+        "legroom_rating" => |s| s.legroom_rating,
     },
 }
 
@@ -282,6 +308,12 @@ pub struct FlightResult {
     /// Raw booking token — pass to :meth:`Client.offer` for booking URLs.
     #[pyo3(get)]
     pub booking_token: String,
+    /// `True` when the itinerary requires a self-transfer, or `None`.
+    #[pyo3(get)]
+    pub self_transfer: Option<bool>,
+    /// `True` when the itinerary mixes cabin classes across legs, or `None`.
+    #[pyo3(get)]
+    pub mixed_cabin: Option<bool>,
     legs: Vec<LegInfo>,
     layovers: Vec<LayoverInfo>,
     emissions: Option<EmissionsInfo>,
@@ -332,6 +364,8 @@ impl FlightResult {
         d.set_item("stops", self.stops)?;
         d.set_item("price", self.price)?;
         d.set_item("booking_token", &self.booking_token)?;
+        d.set_item("self_transfer", self.self_transfer)?;
+        d.set_item("mixed_cabin", self.mixed_cabin)?;
         let legs = PyList::empty(py);
         for l in &self.legs {
             legs.append(l.to_dict(py)?)?;
@@ -673,6 +707,14 @@ fn flight_info_to_leg(fi: &gflights::parsers::response::flight_response::FlightI
             fi.arrival_date.year, fi.arrival_date.month, fi.arrival_date.day
         ),
         duration_minutes: fi.leg_duration_minutes,
+        aircraft: fi.aircraft.clone(),
+        legroom: fi.legroom.clone(),
+        overnight: fi.overnight,
+        co2_grams: fi.co2_emissions_g,
+        wifi: fi.amenities.as_ref().and_then(|a| a.wifi),
+        power: fi.amenities.as_ref().and_then(|a| a.power),
+        on_demand_video: fi.amenities.as_ref().and_then(|a| a.on_demand_video),
+        legroom_rating: fi.amenities.as_ref().and_then(|a| a.legroom_rating),
     }
 }
 
@@ -708,6 +750,8 @@ fn itinerary_container_to_flight(
         stops: ic.itinerary.stop_count(),
         price: ic.itinerary_cost.trip_cost.as_ref().map(|c| c.price),
         booking_token: ic.itinerary_cost.departure_token.clone(),
+        self_transfer: ic.itinerary.self_transfer,
+        mixed_cabin: ic.mixed_cabin,
         legs: ic
             .itinerary
             .flight_details
@@ -901,6 +945,7 @@ impl Client {
         max_price = None,
         carry_on = 0,
         checked_bags = 0,
+        exclude_basic_economy = false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search<'py>(
@@ -924,6 +969,7 @@ impl Client {
         max_price: Option<i32>,
         carry_on: u8,
         checked_bags: u8,
+        exclude_basic_economy: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         // Validate synchronously — raises ValueError before the coroutine is even awaited.
         let dep_date = parse_date(&date)?;
@@ -958,6 +1004,7 @@ impl Client {
                 .map_err(anyhow_to_py)?
                 .departing_date(dep_date);
             builder = filters.apply(builder);
+            builder = builder.exclude_basic_economy(exclude_basic_economy);
             if let Some(r) = ret_date {
                 builder = builder.return_date(r);
             }

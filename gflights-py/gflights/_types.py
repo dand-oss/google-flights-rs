@@ -18,7 +18,9 @@ TravelClass = Literal["economy", "premium-economy", "business", "first"]
 StopFilter = Literal["all", "nonstop", "one-stop"]
 """Stop count filter for :meth:`Client.search`."""
 
-SortOrder = Literal["best", "price", "duration", "departure-time", "arrival-time"]
+SortOrder = Literal[
+    "top-flights", "best", "price", "duration", "departure-time", "arrival-time", "emissions"
+]
 """Sort order for :meth:`Client.search` results."""
 
 Duration = Literal["weekend", "week", "2weeks"]
@@ -72,6 +74,8 @@ class SearchFilters:
     :param airlines_exclude: IATA codes or alliances to exclude.
     :param via: Require a connection through these airports.
     :param lower_emissions: Restrict to below-average CO₂ flights.
+    :param exclude_basic_economy: Exclude basic-economy fares from results.
+        Honoured by ``search`` only.
     :param max_price: Maximum price cap in the client currency.
     :param carry_on: Carry-on bags required (0 = no restriction).
     :param checked_bags: Checked bags required (0 = no restriction).
@@ -90,6 +94,7 @@ class SearchFilters:
     airlines_exclude: List[str] = field(default_factory=list)
     via: List[str] = field(default_factory=list)
     lower_emissions: bool = False
+    exclude_basic_economy: bool = False
     max_price: Optional[int] = None
     carry_on: int = 0
     checked_bags: int = 0

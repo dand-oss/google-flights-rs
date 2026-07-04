@@ -180,6 +180,7 @@ class Client:
             max_price=f.max_price,
             carry_on=f.carry_on,
             checked_bags=f.checked_bags,
+            exclude_basic_economy=f.exclude_basic_economy,
         )
 
     # ------------------------------------------------------------- price_graph
