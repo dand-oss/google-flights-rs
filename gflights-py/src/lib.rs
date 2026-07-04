@@ -169,6 +169,10 @@ pub struct LegInfo {
     pub from_airport: String,
     /// IATA code of the destination airport (e.g. `"JFK"`).
     pub to_airport: String,
+    /// Marketing carrier code for this leg (e.g. `"BA"`), or empty string.
+    pub airline_code: String,
+    /// Marketing flight number for this leg (e.g. `"175"`), or empty string.
+    pub flight_number: String,
     /// Departure time as `"HH:MM"` or empty string.
     pub departure_time: String,
     /// Arrival time as `"HH:MM"` or empty string.
@@ -200,9 +204,10 @@ pub struct LegInfo {
 py_data_class! {
     LegInfo,
     repr = |s| format!(
-        "LegInfo(from={:?}, to={:?}, dep={} {}, arr={} {}, duration={})",
+        "LegInfo(from={:?}, to={:?}, flight={:?}, dep={} {}, arr={} {}, duration={})",
         s.from_airport,
         s.to_airport,
+        format!("{}{}", s.airline_code, s.flight_number),
         s.departure_date,
         s.departure_time,
         s.arrival_date,
@@ -212,6 +217,8 @@ py_data_class! {
     dict = {
         "from_airport" => |s| &s.from_airport,
         "to_airport" => |s| &s.to_airport,
+        "airline_code" => |s| &s.airline_code,
+        "flight_number" => |s| &s.flight_number,
         "departure_time" => |s| &s.departure_time,
         "arrival_time" => |s| &s.arrival_time,
         "departure_date" => |s| &s.departure_date,
@@ -696,6 +703,8 @@ fn flight_info_to_leg(fi: &gflights::parsers::response::flight_response::FlightI
     LegInfo {
         from_airport: fi.departure_airport_code.clone(),
         to_airport: fi.destination_airport_code.clone(),
+        airline_code: fi.airplane_info.code.clone(),
+        flight_number: fi.airplane_info.flight_number.clone(),
         departure_time: format!("{dep_h:02}:{:02}", fi.departure_time.minute),
         arrival_time: format!("{arr_h:02}:{:02}", fi.arrival_time.minute),
         departure_date: format!(

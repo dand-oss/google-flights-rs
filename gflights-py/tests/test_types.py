@@ -23,7 +23,8 @@ def test_flight_result_has_expected_attributes():
 
 
 def test_leg_info_has_expected_attributes():
-    for attr in ("from_airport", "to_airport", "departure_time", "arrival_time",
+    for attr in ("from_airport", "to_airport", "airline_code", "flight_number",
+                 "departure_time", "arrival_time",
                  "departure_date", "arrival_date", "duration_minutes"):
         assert hasattr(gflights.LegInfo, attr), f"LegInfo missing .{attr}"
 

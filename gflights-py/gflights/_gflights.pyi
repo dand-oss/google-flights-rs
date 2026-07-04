@@ -18,6 +18,8 @@ class GFlightsError(Exception):
 class LegInfo:
     from_airport: str
     to_airport: str
+    airline_code: str
+    flight_number: str
     departure_time: str
     arrival_time: str
     departure_date: str

@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `search --format json`.
 - Python bindings expose the new leg and itinerary fields, the new sort
   modes, and `SearchFilters.exclude_basic_economy`.
+- `LegInfo` in the Python bindings now exposes the marketing `airline_code`
+  and `flight_number` for each leg.
 - Live cross-validation test against fli, comparing cheapest fares and
   itinerary overlap on the same route.
 
