@@ -28,8 +28,10 @@ use gflights::requests::api::ApiClient;
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Minimal tracing — RUST_LOG overrides.
+    // Minimal tracing — RUST_LOG overrides. Logs go to stderr so they never
+    // corrupt stdout, which the `mcp` subcommand uses as its JSON-RPC transport.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
