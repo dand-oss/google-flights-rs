@@ -1113,6 +1113,11 @@ const USER_AGENTS: &[&str] = &[
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
 ];
 
+// Compile-time guard: the User-Agent pool must never be empty, or
+// `pick_user_agent`'s modulo-by-`len()` would panic. Binding element 0 in a
+// `const` fails the build (const index out of bounds) if the pool is emptied.
+const _: &str = USER_AGENTS[0];
+
 /// Picks a User-Agent from [`USER_AGENTS`] using a cheap time-seeded index.
 ///
 /// No external RNG dependency is needed: the sub-second nanosecond component of
@@ -1388,7 +1393,6 @@ mod tests {
 
     #[test]
     fn user_agent_pool_is_nonempty_and_valid_headers() {
-        assert!(!USER_AGENTS.is_empty());
         for ua in USER_AGENTS {
             assert!(
                 HeaderValue::from_str(ua).is_ok(),
