@@ -94,12 +94,14 @@ mod tests {
                 total_time_minutes: 0,
                 connection_info: None,
                 emissions: None,
+                self_transfer: None,
             },
             itinerary_cost: ItineraryCost {
                 departure_token: "tok".to_owned(),
                 trip_cost: None,
             },
             departure_protobuf: String::new(),
+            mixed_cabin: None,
         };
         assert!(ff.add_element(dummy()).is_ok());
         assert!(ff.is_full());
@@ -116,12 +118,14 @@ mod tests {
                 total_time_minutes: 0,
                 connection_info: None,
                 emissions: None,
+                self_transfer: None,
             },
             itinerary_cost: ItineraryCost {
                 departure_token: tok.to_owned(),
                 trip_cost: None,
             },
             departure_protobuf: String::new(),
+            mixed_cabin: None,
         };
         assert_eq!(ff.get_departure_token(), None);
         ff.add_element(make("first_token")).unwrap();
@@ -141,12 +145,14 @@ mod tests {
                 total_time_minutes: 120,
                 connection_info: None,
                 emissions: None,
+                self_transfer: None,
             },
             itinerary_cost: ItineraryCost {
                 departure_token: "tok".to_owned(),
                 trip_cost: None,
             },
             departure_protobuf: String::new(),
+            mixed_cabin: None,
         };
         ff.add_element(dummy).unwrap();
         let info = ff.maybe_get_nth_flight_info(0);
