@@ -232,10 +232,14 @@ fn serialize_price_filter(max: Option<i32>) -> String {
 
 /// Serialise the baggage filter to the Google Flights wire format.
 ///
-/// `[carry_on_count, checked_count]` when set; `null` when absent.
+/// `[checked_count, carry_on_count]` when set; `null` when absent.
+/// The wire order is checked-first — verified against the web UI's own
+/// request body and the independently reverse-engineered index map in
+/// <https://github.com/punitarani/fli>, which documents main settings
+/// position 10 as `[checked_bags, carry_on]`.
 fn serialize_baggage(b: Option<(u8, u8)>) -> String {
     match b {
-        Some((carry_on, checked)) => format!("[{carry_on},{checked}]"),
+        Some((carry_on, checked)) => format!("[{checked},{carry_on}]"),
         None => "null".to_owned(),
     }
 }
@@ -1368,5 +1372,13 @@ mod tests {
             s.contains(r#"\"2026-07-03\",null,null,[\"DXB\"],null,"#),
             "via [9] must encode as [\"DXB\"] like the web UI: {s}"
         );
+    }
+    #[test]
+    fn test_serialize_baggage_wire_order_is_checked_first() {
+        // Config carries carry-on first, checked second; the wire wants
+        // checked first.
+        assert_eq!(serialize_baggage(Some((1, 2))), "[2,1]");
+        assert_eq!(serialize_baggage(Some((0, 1))), "[1,0]");
+        assert_eq!(serialize_baggage(None), "null");
     }
 }
