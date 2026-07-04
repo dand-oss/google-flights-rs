@@ -1267,6 +1267,11 @@ mod tests {
                 plane_crew_by: None,
                 name: "777".to_string(),
             },
+            aircraft: None,
+            legroom: None,
+            amenities: None,
+            overnight: None,
+            co2_emissions_g: None,
         };
         let choosen_itinerary_2 = FlightInfo {
             departure_airport_code: "LHR".to_owned(),
@@ -1296,6 +1301,11 @@ mod tests {
                 plane_crew_by: None,
                 name: "777".to_string(),
             },
+            aircraft: None,
+            legroom: None,
+            amenities: None,
+            overnight: None,
+            co2_emissions_g: None,
         };
 
         [choosen_itinerary_1, choosen_itinerary_2].to_vec()

@@ -187,6 +187,50 @@ impl<'de> Deserialize<'de> for Emissions {
 }
 
 // ---------------------------------------------------------------------------
+// Amenities — decoded from the 12-slot array at leg position 12
+// ---------------------------------------------------------------------------
+
+/// Per-leg amenities reported by Google Flights.
+///
+/// All fields are tri-state: `Some(true)` / `Some(false)` when Google
+/// published the signal for this leg, `None` when it did not.
+///
+/// Confirmed slot mapping from live captures in May 2026, cross-checked
+/// against the independently reverse-engineered decoder in
+/// <https://github.com/punitarani/fli>:
+/// slot 1 → wifi, slot 5 → power outlet, slot 9 → on-demand video,
+/// slot 11 → integer legroom rating with values 2 or 3 observed.
+#[derive(Debug, Serialize, Clone, Default, PartialEq)]
+pub struct Amenities {
+    pub wifi: Option<bool>,
+    pub power: Option<bool>,
+    pub on_demand_video: Option<bool>,
+    pub legroom_rating: Option<i64>,
+}
+
+impl Amenities {
+    /// `true` when none of the known slots carried a usable value.
+    pub fn is_empty(&self) -> bool {
+        self.wifi.is_none()
+            && self.power.is_none()
+            && self.on_demand_video.is_none()
+            && self.legroom_rating.is_none()
+    }
+}
+
+impl<'de> Deserialize<'de> for Amenities {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let arr = Vec::<Value>::deserialize(d)?;
+        Ok(Amenities {
+            wifi: get_idx(&arr, 1),
+            power: get_idx(&arr, 5),
+            on_demand_video: get_idx(&arr, 9),
+            legroom_rating: get_idx(&arr, 11),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // FlightInfo — Vec<Value> based, extract only fields used by SerializeToWeb
 // ---------------------------------------------------------------------------
 
@@ -201,11 +245,26 @@ pub struct FlightInfo {
     pub departure_date: Date,
     pub arrival_date: Date,
     pub airplane_info: AirplaneInfo,
+    /// Aircraft model at leg position 17, for example "Airbus A321neo".
+    pub aircraft: Option<String>,
+    /// Legroom description, for example "76 cm" — the long form at
+    /// position 30, falling back to the short form at position 14.
+    pub legroom: Option<String>,
+    /// Cabin amenity flags at position 12. `None` when Google published
+    /// no usable amenity signal for this leg.
+    pub amenities: Option<Amenities>,
+    /// `true` when the leg arrives on a later calendar day — position 19.
+    pub overnight: Option<bool>,
+    /// CO₂ emissions for this individual leg, in grams — position 31.
+    pub co2_emissions_g: Option<i64>,
 }
 
 impl<'de> Deserialize<'de> for FlightInfo {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let arr = Vec::<Value>::deserialize(d)?;
+        let legroom_short: Option<String> = get_idx(&arr, 14);
+        let legroom_long: Option<String> = get_idx(&arr, 30);
+        let amenities: Option<Amenities> = get_idx(&arr, 12);
         Ok(FlightInfo {
             departure_airport_code: get_idx(&arr, 3).unwrap_or_default(),
             destination_airport_code: get_idx(&arr, 6).unwrap_or_default(),
@@ -215,6 +274,11 @@ impl<'de> Deserialize<'de> for FlightInfo {
             departure_date: get_idx(&arr, 20).unwrap_or_default(),
             arrival_date: get_idx(&arr, 21).unwrap_or_default(),
             airplane_info: get_idx(&arr, 22).unwrap_or_default(),
+            aircraft: get_idx(&arr, 17),
+            legroom: legroom_long.or(legroom_short),
+            amenities: amenities.filter(|a| !a.is_empty()),
+            overnight: get_idx(&arr, 19),
+            co2_emissions_g: get_idx(&arr, 31),
         })
     }
 }
@@ -248,6 +312,9 @@ pub struct Itinerary {
     pub connection_info: Option<Vec<ConnectionInfo>>,
     /// CO2 emissions data for this itinerary.
     pub emissions: Option<Emissions>,
+    /// `true` when the itinerary requires a self-transfer — separate tickets
+    /// or an unprotected connection. Position 12 of the raw itinerary array.
+    pub self_transfer: Option<bool>,
 }
 
 impl<'de> Deserialize<'de> for Itinerary {
@@ -259,6 +326,7 @@ impl<'de> Deserialize<'de> for Itinerary {
             total_time_minutes: get_idx(&arr, 9).unwrap_or(0),
             connection_info: get_idx(&arr, 13),
             emissions: get_idx(&arr, 22),
+            self_transfer: get_idx(&arr, 12),
         })
     }
 }
@@ -341,6 +409,9 @@ pub struct ItineraryContainer {
     pub itinerary_cost: ItineraryCost,
     /// Raw protobuf-encoded journey string — used for offer requests.
     pub departure_protobuf: String,
+    /// `true` when the itinerary mixes cabin classes across legs —
+    /// position 10 of the raw container array.
+    pub mixed_cabin: Option<bool>,
 }
 
 impl<'de> Deserialize<'de> for ItineraryContainer {
@@ -352,6 +423,7 @@ impl<'de> Deserialize<'de> for ItineraryContainer {
             itinerary_cost: get_idx(&arr, 1)
                 .ok_or_else(|| serde::de::Error::custom("missing itinerary_cost at index 1"))?,
             departure_protobuf: get_idx(&arr, 8).unwrap_or_default(),
+            mixed_cabin: get_idx(&arr, 10),
         })
     }
 }
@@ -1020,6 +1092,11 @@ mod tests {
                 plane_crew_by: None,
                 name: "Boeing 747".to_owned(),
             },
+            aircraft: None,
+            legroom: None,
+            amenities: None,
+            overnight: None,
+            co2_emissions_g: None,
         };
         let serialized = fi.serialize_to_web().unwrap();
         assert!(serialized.contains("LHR"));
@@ -1123,6 +1200,7 @@ mod tests {
                 total_time_minutes: 120,
                 connection_info: None,
                 emissions: None,
+                self_transfer: None,
             },
             itinerary_cost: ItineraryCost {
                 trip_cost: Some(TripCost {
@@ -1132,6 +1210,7 @@ mod tests {
                 departure_token: token.to_string(),
             },
             departure_protobuf: String::new(),
+            mixed_cabin: None,
         }
     }
 
@@ -1408,6 +1487,7 @@ mod tests {
             total_time_minutes: 0,
             connection_info: None,
             emissions: None,
+            self_transfer: None,
         }
     }
 
@@ -1454,5 +1534,82 @@ mod tests {
         let it = make_itinerary_with_legs(vec![make_flight_info((2026, 9, 10), (2026, 9, 10))]);
         let dep = it.departure_date().unwrap();
         assert_eq!(dep, NaiveDate::from_ymd_opt(2026, 9, 10).unwrap());
+    }
+    #[test]
+    fn amenities_decode_from_known_slots() {
+        // slot 1 = wifi, slot 5 = power, slot 9 = on-demand video, slot 11 = legroom rating
+        let raw = serde_json::json!([
+            null, true, null, null, null, false, null, null, null, true, null, 2
+        ]);
+        let a: Amenities = serde_json::from_value(raw).unwrap();
+        assert_eq!(a.wifi, Some(true));
+        assert_eq!(a.power, Some(false));
+        assert_eq!(a.on_demand_video, Some(true));
+        assert_eq!(a.legroom_rating, Some(2));
+        assert!(!a.is_empty());
+    }
+
+    #[test]
+    fn amenities_all_null_is_empty() {
+        let raw = serde_json::json!([null, null, null]);
+        let a: Amenities = serde_json::from_value(raw).unwrap();
+        assert!(a.is_empty());
+    }
+
+    #[test]
+    fn flight_info_decodes_aircraft_legroom_amenities_and_leg_co2() {
+        // Positional leg array: 3 = departure, 6 = arrival, 8/10 = times,
+        // 11 = duration, 12 = amenities, 14 = legroom short, 17 = aircraft,
+        // 19 = overnight, 20/21 = dates, 22 = airline info, 30 = legroom long,
+        // 31 = leg CO2 grams.
+        let mut leg = vec![serde_json::Value::Null; 32];
+        leg[3] = serde_json::json!("BKK");
+        leg[6] = serde_json::json!("HKG");
+        leg[8] = serde_json::json!([0, 20]);
+        leg[10] = serde_json::json!([4, 30]);
+        leg[11] = serde_json::json!(190);
+        leg[12] = serde_json::json!([
+            null, true, null, null, null, true, null, null, null, null, null, 3
+        ]);
+        leg[14] = serde_json::json!("71 cm");
+        leg[17] = serde_json::json!("Airbus A321neo");
+        leg[19] = serde_json::json!(true);
+        leg[20] = serde_json::json!([2026, 10, 9]);
+        leg[21] = serde_json::json!([2026, 10, 9]);
+        leg[22] = serde_json::json!(["UO", "733", null, "Hong Kong Express"]);
+        leg[30] = serde_json::json!("Below average legroom (71 cm)");
+        leg[31] = serde_json::json!(82000);
+
+        let fi: FlightInfo = serde_json::from_value(serde_json::Value::Array(leg)).unwrap();
+        assert_eq!(fi.aircraft.as_deref(), Some("Airbus A321neo"));
+        assert_eq!(fi.legroom.as_deref(), Some("Below average legroom (71 cm)"));
+        assert_eq!(fi.overnight, Some(true));
+        assert_eq!(fi.co2_emissions_g, Some(82000));
+        let amenities = fi.amenities.expect("amenities should be present");
+        assert_eq!(amenities.wifi, Some(true));
+        assert_eq!(amenities.power, Some(true));
+        assert_eq!(amenities.legroom_rating, Some(3));
+    }
+
+    #[test]
+    fn flight_info_legroom_falls_back_to_short_form() {
+        let mut leg = vec![serde_json::Value::Null; 23];
+        leg[3] = serde_json::json!("BKK");
+        leg[6] = serde_json::json!("HKG");
+        leg[14] = serde_json::json!("71 cm");
+        let fi: FlightInfo = serde_json::from_value(serde_json::Value::Array(leg)).unwrap();
+        assert_eq!(fi.legroom.as_deref(), Some("71 cm"));
+        assert!(fi.amenities.is_none());
+    }
+
+    #[test]
+    fn itinerary_decodes_self_transfer_flag() {
+        let mut raw = vec![serde_json::Value::Null; 23];
+        raw[0] = serde_json::json!("UO");
+        raw[2] = serde_json::json!([]);
+        raw[9] = serde_json::json!(745);
+        raw[12] = serde_json::json!(true);
+        let it: Itinerary = serde_json::from_value(serde_json::Value::Array(raw)).unwrap();
+        assert_eq!(it.self_transfer, Some(true));
     }
 }
