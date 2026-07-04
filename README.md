@@ -211,9 +211,13 @@ server over stdio, exposing flight tools to MCP clients such as Claude Desktop:
 gflights mcp
 ```
 
-It speaks JSON-RPC 2.0 on stdin/stdout and exposes these tools: `search`,
-`price_graph`, `cheapest_dates`, `explore`, `deals`. Each maps its JSON arguments
-to the same library calls the CLI uses and returns the result as JSON.
+It speaks JSON-RPC 2.0 on stdin/stdout and exposes a tool for every CLI action:
+`search`, `price_graph`, `cheapest_dates`, `explore`, `deals`, `date_grid`,
+`offer`, and `multi_city`. The `search` and `offer` tools accept the full search
+filter set (sort, layover bounds, airline include/exclude, connecting airports,
+time-of-day windows, baggage, price cap, basic-economy exclusion, and extra
+travelers). Each maps its JSON arguments to the same library calls the CLI uses
+and returns the result as JSON.
 
 Example client configuration (Claude Desktop `claude_desktop_config.json`):
 

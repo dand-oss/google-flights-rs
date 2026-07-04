@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP server parity with the CLI: the stdio server now exposes `date_grid`,
+  `offer`, and `multi_city` tools in addition to `search`, `price_graph`,
+  `cheapest_dates`, `explore`, and `deals`. The `search` and `offer` tools accept
+  the full search filter set — sort mode, min/max layover, lower-emissions,
+  airline include/exclude, connecting airports, time-of-day windows, baggage,
+  price cap, basic-economy exclusion, and children/infant travelers.
 - Time-of-day windows on the CLI: `--time`, `--arr-time`, `--ret-time` and
   `--ret-arr-time` on `search` expose the existing `FlightTimes` filter,
   serialized at per-leg position 2.
