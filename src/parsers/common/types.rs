@@ -79,11 +79,13 @@ impl From<i32> for TravelClass {
 
 /// Sort order for flight search results.
 ///
-/// Discriminants follow Google Flights' sort dropdown — best, price,
-/// departure time, arrival time, duration — the same values the web UI
-/// sends at position 2 of the outer request array.
+/// Discriminants follow Google Flights' sort dropdown — top flights, best,
+/// price, departure time, arrival time, duration, emissions — the same
+/// values the web UI sends at position 2 of the outer request array.
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum SortOrder {
+    /// Google's curated "top flights" ranking.
+    TopFlights = 0,
     /// Google's default: best combination of price, duration, and convenience.
     #[default]
     Best = 1,
@@ -95,6 +97,8 @@ pub enum SortOrder {
     ArrivalTime = 4,
     /// Sort by total journey duration, shortest first.
     Duration = 5,
+    /// Sort by CO₂ emissions, lowest first.
+    Emissions = 6,
 }
 
 impl SortOrder {
@@ -150,11 +154,13 @@ mod tests {
 
     #[test]
     fn sort_order_discriminant_values() {
+        assert_eq!(SortOrder::TopFlights as i32, 0);
         assert_eq!(SortOrder::Best as i32, 1);
         assert_eq!(SortOrder::Price as i32, 2);
         assert_eq!(SortOrder::DepartureTime as i32, 3);
         assert_eq!(SortOrder::ArrivalTime as i32, 4);
         assert_eq!(SortOrder::Duration as i32, 5);
+        assert_eq!(SortOrder::Emissions as i32, 6);
     }
 
     #[test]
@@ -165,11 +171,13 @@ mod tests {
     #[test]
     fn sort_order_server_sort_is_passthrough_for_all_modes() {
         for mode in [
+            SortOrder::TopFlights,
             SortOrder::Best,
             SortOrder::Price,
             SortOrder::DepartureTime,
             SortOrder::ArrivalTime,
             SortOrder::Duration,
+            SortOrder::Emissions,
         ] {
             assert_eq!(mode.server_sort(), mode);
         }
