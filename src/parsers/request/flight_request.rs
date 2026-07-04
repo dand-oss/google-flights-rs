@@ -54,6 +54,8 @@ pub struct FlightRequestOptions<'a> {
     pub max_price: Option<i32>,
     /// Baggage allowance `(carry_on_count, checked_count)`. `None` = no restriction.
     pub baggage: Option<(u8, u8)>,
+    /// If `true`, exclude basic-economy fares (outer itinerary array position \[28\]).
+    pub exclude_basic_economy: bool,
 }
 
 impl ToRequestBody for FlightRequestOptions<'_> {
@@ -122,6 +124,7 @@ impl TryFrom<&FlightRequestOptions<'_>> for RequestBody {
             trip_type,
             max_price: options.max_price,
             baggage: options.baggage,
+            exclude_basic_economy: options.exclude_basic_economy,
         };
 
         // logic: If return is defined, choose token of return, else choose the one of the way there, else none.
@@ -307,6 +310,8 @@ pub struct ItineraryRequest<'a> {
     pub max_price: Option<i32>,
     /// Baggage filter (position 10 of the outer itinerary array). `None` = no restriction.
     pub baggage: Option<(u8, u8)>,
+    /// Exclude basic-economy fares (position 28 of the outer itinerary array).
+    pub exclude_basic_economy: bool,
 }
 
 impl<'a> ItineraryRequest<'a> {
@@ -381,6 +386,7 @@ impl<'a> ItineraryRequest<'a> {
             trip_type,
             max_price,
             baggage,
+            exclude_basic_economy: false,
         }
     }
 }
@@ -388,6 +394,16 @@ impl<'a> ItineraryRequest<'a> {
 impl SerializeToWeb for ItineraryRequest<'_> {
     fn serialize_to_web(&self) -> Result<String> {
         let graph = if self.is_graph { ",1" } else { "" };
+        // Basic-economy exclusion lives at position [28]; positions [18]-[27]
+        // are always null. Only emit the extended tail when the flag is set so
+        // existing payloads stay byte-identical otherwise. The graph flag,
+        // when present, occupies [18] — mutually exclusive with the tail in
+        // practice because the calendar endpoints ignore fare-class filters.
+        let exclude_tail = if self.exclude_basic_economy {
+            ",null,null,null,null,null,null,null,null,null,null,1"
+        } else {
+            ""
+        };
         Ok(format!(
             // [null,null,{trip},null,[],{class},{travelers},{price},null,null,{baggage},null,null,{legs},null,null,null,1{graph}]
             //   [0]  null
@@ -398,14 +414,16 @@ impl SerializeToWeb for ItineraryRequest<'_> {
             //   [10] baggage filter
             //   [13] legs
             //   [17] constant 1
-            r#"[null,null,{0},null,[],{1},{2},{3},null,null,{4},null,null,{5},null,null,null,1{6}]"#,
+            //   [28] exclude basic economy, emitted only when set
+            r#"[null,null,{0},null,[],{1},{2},{3},null,null,{4},null,null,{5},null,null,null,1{6}{7}]"#,
             self.trip_type as i32,
             &self.travel_class.serialize_to_web()?,
             &self.travelers.serialize_to_web()?,
             serialize_price_filter(self.max_price),
             serialize_baggage(self.baggage),
             &self.legs.serialize_to_web()?,
-            graph
+            graph,
+            exclude_tail
         ))
     }
 }
@@ -633,6 +651,7 @@ mod tests {
             lower_emissions: false,
             max_price: None,
             baggage: None,
+            exclude_basic_economy: false,
         };
 
         let req: RequestBody = (&search_settings).try_into()?;
@@ -691,6 +710,7 @@ mod tests {
             lower_emissions: false,
             max_price: None,
             baggage: None,
+            exclude_basic_economy: false,
         };
 
         let req: RequestBody = (&search_settings).try_into()?;
@@ -924,6 +944,7 @@ mod tests {
             trip_type: TripType::OneWay,
             max_price: None,
             baggage: None,
+            exclude_basic_economy: false,
         };
 
         let expected_single_leg = r#"[null,null,2,null,[],1,[1,0,0,0],null,null,null,null,null,null,[[[[[\"MXP\",0]]],[[[\"CDG\",0]]],null,0,null,null,\"2022-10-20\",null,null,null,null,null,null,null,3]],null,null,null,1]"#;
@@ -937,6 +958,7 @@ mod tests {
             trip_type: TripType::Return,
             max_price: None,
             baggage: None,
+            exclude_basic_economy: false,
         };
         assert_eq!(itinerary_return.serialize_to_web()?, expected_two_legs);
         Ok(())
@@ -1206,6 +1228,7 @@ mod tests {
             lower_emissions: false,
             max_price: None,
             baggage: None,
+            exclude_basic_economy: false,
         };
         let req: RequestBody = (&opts).try_into()?;
         // Both LHR and LGW must appear in the body; JFK as the single arrival.
@@ -1501,6 +1524,64 @@ mod tests {
         let body = complete.serialize_to_web()?;
         // Sort mode 2 — price — at outer position 2, show-all = 1.
         assert!(body.contains(r#",2,1,0,1]"]&at="#), "body: {body}");
+        Ok(())
+    }
+    #[test]
+    fn test_serialize_price_filter() {
+        assert_eq!(serialize_price_filter(Some(250)), "[null,250]");
+        assert_eq!(serialize_price_filter(None), "null");
+    }
+
+    #[test]
+    fn test_itinerary_request_bags_price_and_exclude_basic() -> Result<()> {
+        let departure = Location {
+            loc_identifier: "MXP".to_owned(),
+            loc_type: PlaceType::Airport,
+            location_name: None,
+        };
+        let arrival = Location {
+            loc_identifier: "CDG".to_owned(),
+            loc_type: PlaceType::Airport,
+            location_name: None,
+        };
+        let binding = FlightTimes::default();
+        let stopover_max = StopoverDuration::UNLIMITED;
+        let duration_max = TotalDuration::UNLIMITED;
+        let leg = SingleLegStruct {
+            departure: vec![vec![&departure]],
+            arrival: vec![vec![&arrival]],
+            stop_options: &StopOptions::All,
+            date: "2022-10-20",
+            times: &binding,
+            stopover_max: &stopover_max,
+            stopover_min: &StopoverDuration::UNLIMITED,
+            duration_max: &duration_max,
+            chosen_itinerary: None,
+            airlines_include: &[],
+            airlines_exclude: &[],
+            connecting_airports: &[],
+            lower_emissions: false,
+            is_return: false,
+        };
+        let travelers = Travelers::new([1, 0, 0, 0].to_vec())?;
+        let itinerary = ItineraryRequest {
+            legs: vec![leg],
+            travel_class: &TravelClass::Economy,
+            travelers: &travelers,
+            is_graph: false,
+            trip_type: TripType::OneWay,
+            max_price: Some(250),
+            baggage: Some((1, 2)),
+            exclude_basic_economy: true,
+        };
+        let out = itinerary.serialize_to_web()?;
+        // [7] price = [null,250]; [10] baggage = [2,1] with checked first;
+        // [18..27] null padding; [28] = 1 for exclude basic economy.
+        assert!(out.contains(",[null,250],null,null,[2,1],"), "body: {out}");
+        assert!(
+            out.ends_with(",1,null,null,null,null,null,null,null,null,null,null,1]"),
+            "body: {out}"
+        );
         Ok(())
     }
 }
