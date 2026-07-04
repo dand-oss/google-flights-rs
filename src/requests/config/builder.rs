@@ -44,6 +44,8 @@ pub struct ConfigBuilder {
     pub(super) max_price: Option<i32>,
     /// Baggage filter `(carry_on_count, checked_count)`. `None` = no restriction.
     pub(super) baggage: Option<(u8, u8)>,
+    /// Exclude basic-economy fares from results. Default: `false`.
+    pub(super) exclude_basic_economy: bool,
 }
 
 impl ConfigBuilder {
@@ -227,6 +229,14 @@ impl ConfigBuilder {
         self
     }
 
+    /// Exclude basic-economy fares from results.
+    ///
+    /// Defaults to `false`, which keeps basic-economy fares included.
+    pub fn exclude_basic_economy(mut self, exclude: bool) -> Self {
+        self.exclude_basic_economy = exclude;
+        self
+    }
+
     pub fn build(self) -> Result<Config> {
         let departing_date = self
             .departing_date
@@ -269,6 +279,7 @@ impl ConfigBuilder {
             lower_emissions: self.lower_emissions,
             max_price: self.max_price,
             baggage: self.baggage,
+            exclude_basic_economy: self.exclude_basic_economy,
         })
     }
 }

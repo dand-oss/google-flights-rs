@@ -586,6 +586,7 @@ impl ApiClient {
         let date_return = args.return_date.map(|f| f.to_string());
         let server_sort = args.sort_order.server_sort();
         let req_options = FlightRequestOptions {
+            exclude_basic_economy: args.exclude_basic_economy,
             departing_city: &args.departure,
             arriving_city: &args.destination,
             date_start: &date_start,
