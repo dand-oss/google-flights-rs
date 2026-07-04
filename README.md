@@ -25,7 +25,11 @@ Search flights, compare prices across a date range, retrieve booking offers, and
 - **Connection filters** — require layover through specific airports; set min/max layover duration
 - **Lower-emissions filter** — restrict to flights with below-average CO₂
 - **Locale support** — `language` + `country` for non-English results
-- **Sort order** — Best · Price · Duration · Departure time · Arrival time
+- **Sort order** — Top flights · Best · Price · Departure time · Arrival time · Duration · Emissions — sent server-side and re-applied client-side
+- **Time-of-day windows** — bound departure and arrival hours per leg with `--time 6-20`
+- **Baggage-inclusive pricing** — fold checked and carry-on bag fees into displayed prices with `--bags` and `--carry-on`
+- **Fare filters** — a `--max-price` cap and `--exclude-basic` basic-economy exclusion
+- **Seat & amenity data** — aircraft model, legroom, Wi-Fi, power and video flags, per-leg CO₂, self-transfer and mixed-cabin markers in JSON output
 - **CO2 / emissions** — included in parsed itinerary data
 - **Layover details** — connection time, airport codes, overnight warnings
 - **Rate limiting** — built-in governor-based token-bucket limiter
@@ -116,13 +120,21 @@ gflights> quit
 | `--adults <N>` | `1` | Number of adult passengers |
 | `--class <CLASS>` | `economy` | `economy` · `premium-economy` · `business` · `first` |
 | `--stops <STOPS>` | `all` | `all` · `non-stop` · `one-stop` |
-| `--sort <SORT>` | `best` | `best` · `price` · `duration` · `departure-time` · `arrival-time` ¹ |
+| `--sort <SORT>` | `best` | `top-flights` · `best` · `price` · `departure-time` · `arrival-time` · `duration` · `emissions` ¹ |
 | `--airline <CODE>` | — | Include airline IATA code or alliance (`ONEWORLD`, `SKYTEAM`, `STAR_ALLIANCE`). Repeatable. |
 | `--exclude-airline <CODE>` | — | Exclude airline or alliance. Repeatable. |
 | `--via <IATA>` | — | Require connection through this airport. Repeatable. |
 | `--min-layover <MINS>` | none | Minimum layover in minutes (rounded up to 30 min intervals) |
 | `--max-layover <MINS>` | none | Maximum layover in minutes |
 | `--lower-emissions` | off | Restrict to below-average CO₂ flights |
+| `--time <H-H>` | none | Outbound departure time window on the 24h clock, for example `6-20` |
+| `--arr-time <H-H>` | none | Outbound arrival time window |
+| `--ret-time <H-H>` | none | Return-leg departure time window, round trips only |
+| `--ret-arr-time <H-H>` | none | Return-leg arrival time window, round trips only |
+| `--bags <N>` | `0` | Checked bags, 0 to 2, to include in the displayed price |
+| `--carry-on <N>` | `0` | Carry-on bags, 0 to 2, to include in the displayed price |
+| `--max-price <N>` | none | Maximum total price in the result currency |
+| `--exclude-basic` | off | Exclude basic-economy fares |
 | `--show-co2` | off | Add a CO₂ kg column to the table output |
 | `--detail` | off | Show layover airports (`via ZRH (65 min)`) and `+1` for next-day arrivals |
 | `--currency <CURRENCY>` | `euro` | Result currency (e.g. `us-dollar`, `british-pound`) |
@@ -130,7 +142,7 @@ gflights> quit
 | `--country <CODE>` | `GB` | ISO 3166-1 alpha-2 country code |
 | `--format <FORMAT>` | `table` | `table` · `json` |
 
-¹ `departure-time` and `arrival-time` are sorted client-side after Google returns results.
+¹ All sort modes are sent to the server with the web UI's own discriminants and re-applied client-side to guarantee ordering.
 
 ### `dgrid` flag reference
 
