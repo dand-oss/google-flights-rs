@@ -508,9 +508,11 @@ impl TryFrom<&MultiCityRequestOptions<'_>> for RequestBody {
 
         let legs_json = build_multi_city_legs(cfg)?;
 
+        // Itinerary position [2] is the trip type — 3 for multi-city; the
+        // sort mode goes at position 2 of the *outer* array below.
         let itinerary_json = format!(
-            r#"[null,null,{sort},null,[],{class},{travelers},{price},null,null,{baggage},null,null,{legs},null,null,null,1]"#,
-            sort = server_sort as i32,
+            r#"[null,null,{trip},null,[],{class},{travelers},{price},null,null,{baggage},null,null,{legs},null,null,null,1]"#,
+            trip = TripType::MultiCity as i32,
             class = cfg.travel_class.serialize_to_web()?,
             travelers = cfg.travellers.serialize_to_web()?,
             price = serialize_price_filter(cfg.max_price),
@@ -523,8 +525,9 @@ impl TryFrom<&MultiCityRequestOptions<'_>> for RequestBody {
             .as_millis();
 
         let body = format!(
-            r#"f.req=[null,"[[],{itinerary},0,0,0,1]"]&at=AAuQa1qiXfSThbBOCdcDUAVTopoc:{epoch}&"#,
+            r#"f.req=[null,"[[],{itinerary},{sort},1,0,1]"]&at=AAuQa1qiXfSThbBOCdcDUAVTopoc:{epoch}&"#,
             itinerary = itinerary_json,
+            sort = server_sort as i32,
             epoch = epoch_now,
         );
 
