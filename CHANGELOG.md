@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Time-of-day windows on the CLI: `--time`, `--arr-time`, `--ret-time` and
+  `--ret-arr-time` on `search` expose the existing `FlightTimes` filter,
+  serialized at per-leg position 2.
+- Baggage-inclusive pricing on the CLI: `--bags` for checked bags and
+  `--carry-on` on `search` expose the existing baggage filter; `--max-price`
+  exposes the price cap.
+- Basic-economy exclusion: `Config::exclude_basic_economy`,
+  `ConfigBuilder::exclude_basic_economy` and `search --exclude-basic` send
+  the flag at outer itinerary position 28.
+- Sort modes `SortOrder::TopFlights` with discriminant 0 and
+  `SortOrder::Emissions` with discriminant 6; `search --sort emissions`
+  sorts by per-itinerary CO₂.
+- Seat and amenity response data: `FlightInfo` now parses `aircraft` from
+  leg position 17, `legroom` from position 30 falling back to 14,
+  `amenities` from position 12 — wifi, power, on-demand video, legroom
+  rating — `overnight` from position 19, and per-leg `co2_emissions_g`
+  from position 31. `Itinerary` gains `self_transfer` from position 12 and
+  `ItineraryContainer` gains `mixed_cabin` from position 10. All appear in
+  `search --format json`.
+- Python bindings expose the new leg and itinerary fields, the new sort
+  modes, and `SearchFilters.exclude_basic_economy`.
+- Live cross-validation test against fli, comparing cheapest fares and
+  itinerary overlap on the same route.
+
+### Fixed
+
+- Trip type and sort order were written to the wrong wire slots. Itinerary
+  position 2 is the trip type — 1 round trip, 2 one-way, 3 multi-city —
+  but the sort order was sent there, so every non-best sort silently
+  corrupted the trip type and sort modes 3 to 5 were rejected by the
+  server. The sort mode now goes to its real slot, position 2 of the outer
+  request array, with discriminants matching the web UI: departure time 3,
+  arrival time 4, duration 5.
+- Shopping requests now request the full result list: the outer tail
+  carries show-all 1 where 0 previously capped results at roughly 30
+  curated rows.
+- The baggage filter serializes checked-first, `[checked_bags, carry_on]`,
+  matching the wire format; the two values were swapped.
+- Round-trip booking offers work: the return leg now carries display
+  classifier 1 while the outbound stays 3. `GetBookingResults` rejects
+  round-trip requests when both legs claim classifier 3.
+- Multi-city requests send trip type 3 with the sort mode in the outer
+  array; previously the sort landed in the trip-type slot and the outer
+  tail pinned the server sort to top flights.
+
+Slot layout for every fix and addition was cross-checked against the
+independently reverse-engineered index map in
+<https://github.com/punitarani/fli> and the web UI's own request payloads.
+
+
 ## [0.3.1] — 2026-07-10
 
 ### Fixed
@@ -29,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bumped `pyo3` / `pyo3-async-runtimes` to `0.29.0` and patched
   `crossbeam-epoch`, `quinn-proto`, and `anyhow` to clear all open Dependabot /
   cargo-audit advisories.
+
 
 ## [0.3.0] — 2026-06-06
 
