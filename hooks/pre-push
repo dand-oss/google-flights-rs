@@ -1,7 +1,9 @@
 #!/usr/bin/env sh
-# Versioned pre-commit hook. Install with:
+# Versioned pre-push hook — runs the full gate before a push (i.e. before you
+# open or update a PR), NOT on every commit. Install with:
 #   git config core.hooksPath hooks
-#   chmod +x hooks/pre-commit   # Unix only
+#   chmod +x hooks/pre-push        # Unix only
+# Skip for a work-in-progress push with `git push --no-verify`.
 set -e
 
 echo "▶ cargo fmt --check"
