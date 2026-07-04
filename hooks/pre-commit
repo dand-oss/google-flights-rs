@@ -11,7 +11,7 @@ echo "▶ cargo clippy"
 cargo clippy --all-targets -- -D warnings
 
 echo "▶ rustdoc"
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --quiet 2>&1 | grep -v "^$" || true
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --quiet
 
 echo "▶ cargo test --lib"
 cargo test --lib --quiet
