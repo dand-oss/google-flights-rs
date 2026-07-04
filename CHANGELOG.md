@@ -33,7 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LegInfo` in the Python bindings now exposes the marketing `airline_code`
   and `flight_number` for each leg.
 - Live cross-validation test against fli, comparing cheapest fares and
-  itinerary overlap on the same route.
+  itinerary overlap on the same route. Overlap is measured on
+  `(airline, flight_number)` designators — the flight identity, not the
+  constant route endpoints — and required to clear a configurable ratio
+  threshold rather than merely being non-empty.
 
 ### Fixed
 

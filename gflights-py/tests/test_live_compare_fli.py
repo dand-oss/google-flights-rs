@@ -34,6 +34,13 @@ DESTINATION = "NRT"
 # Price agreement tolerance. Google serves slightly different cached fare
 # snapshots per session, so identical requests can differ by a few percent.
 CHEAPEST_TOLERANCE = 0.10
+# Minimum itinerary-overlap ratio between the two tools. Computed as the
+# overlap coefficient |A∩B| / min(|A|, |B|) over (airline, flight_number)
+# pairs, so it stays meaningful even when the two result sets differ in size.
+# Both tools query the same endpoint, so the smaller set's physical flights
+# should overwhelmingly appear in the other; a low bar here still catches a
+# wire-format regression far more sharply than merely asserting non-empty.
+OVERLAP_MIN_RATIO = 0.30
 
 
 def _search_date() -> str:
@@ -79,19 +86,32 @@ async def test_cheapest_fare_and_itineraries_agree_with_fli():
     )
 
     # Itinerary overlap: the same physical flights should appear in both
-    # result sets. Compare first-leg flight numbers.
+    # result sets. Identify each leg by its (airline, flight_number) pair —
+    # the marketing designator that pins a specific flight — rather than by
+    # airport codes, which are constant for a point-to-point route and so make
+    # the overlap trivially non-empty. Both tools parse this designator from
+    # the same raw response slot, so the pairs are directly comparable.
     our_flights = {
-        f"{leg.from_airport}-{leg.to_airport}"
+        (leg.airline_code, leg.flight_number)
         for f in ours
-        for leg in [f.legs[0]]
+        for leg in f.legs
+        if leg.flight_number
     }
     their_flights = {
-        f"{leg['departure_airport']['code']}-{leg['arrival_airport']['code']}"
+        (leg["airline"]["code"], leg["flight_number"])
         for f in theirs
-        for leg in [f["legs"][0]]
+        for leg in f["legs"]
+        if leg.get("flight_number")
     }
+    assert our_flights, "gflights returned no flight-number designators"
+    assert their_flights, "fli returned no flight-number designators"
+
     common = our_flights & their_flights
-    assert common, (
-        "no first-leg overlap between gflights and fli results — "
-        f"gflights: {sorted(our_flights)[:5]}, fli: {sorted(their_flights)[:5]}"
+    # Overlap coefficient: fraction of the smaller set's flights also present
+    # in the other. Robust to the two tools returning different result counts.
+    ratio = len(common) / min(len(our_flights), len(their_flights))
+    assert ratio >= OVERLAP_MIN_RATIO, (
+        f"itinerary overlap {ratio:.0%} below the {OVERLAP_MIN_RATIO:.0%} "
+        f"threshold — gflights: {sorted(our_flights)[:5]}, "
+        f"fli: {sorted(their_flights)[:5]}, common: {sorted(common)[:5]}"
     )
