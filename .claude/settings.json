@@ -2,16 +2,27 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
-            "type": "command",
+            "command": "cargo fmt \u0026\u0026 cargo clippy --all-targets -- -D warnings",
             "if": "Bash(git commit*)",
-            "command": "cargo fmt && cargo clippy --all-targets -- -D warnings",
+            "statusMessage": "cargo fmt + clippy...",
             "timeout": 120,
-            "statusMessage": "cargo fmt + clippy..."
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bd prime --hook-json",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
       }
     ]
   }
