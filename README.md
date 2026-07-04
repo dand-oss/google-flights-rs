@@ -237,6 +237,32 @@ The global `--proxy` and `--user-agent` flags work here too, e.g.
 
 ---
 
+## Agent skill
+
+The repo ships an agent skill at [`skills/google-flights-rs/`](skills/google-flights-rs/).
+It teaches `SKILL.md`-compatible agents to use the MCP tools or CLI well: search
+cheap dates first, set currency and country, retrieve booking URLs, rank results,
+and flag fare risks. MCP supplies the tools. The skill supplies the workflow.
+Agents without MCP can use the same workflow through the CLI.
+
+Install by symlinking or copying the folder into your agent's skills directory:
+
+```sh
+# Claude Code, personal
+ln -s "$(pwd)/skills/google-flights-rs" ~/.claude/skills/google-flights-rs
+
+# Claude Code, per-project
+ln -s "$(pwd)/skills/google-flights-rs" /path/to/project/.claude/skills/google-flights-rs
+
+# Codex
+ln -s "$(pwd)/skills/google-flights-rs" ~/.codex/skills/google-flights-rs
+```
+
+Then ask the agent things like *"find me flights BKK to NRT in October"* — the
+skill triggers automatically from its description.
+
+---
+
 ## Quick start
 
 ### Search for flights
