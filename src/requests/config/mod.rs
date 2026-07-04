@@ -77,6 +77,9 @@ pub struct Config {
     /// Baggage filter `(carry_on_count, checked_count)` (outer itinerary array position \[10\]).
     /// `None` = no restriction.
     pub baggage: Option<(u8, u8)>,
+    /// If `true`, exclude basic-economy fares from results. Sent at outer
+    /// itinerary array position \[28\].
+    pub exclude_basic_economy: bool,
 }
 
 impl Config {
@@ -132,6 +135,7 @@ impl Config {
             lower_emissions: false,
             max_price: None,
             baggage: None,
+            exclude_basic_economy: false,
         }
     }
 

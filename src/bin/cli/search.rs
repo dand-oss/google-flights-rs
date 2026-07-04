@@ -50,6 +50,10 @@ pub struct SearchArgs {
     /// Show detailed info: layover airports and +1 marker for next-day arrivals.
     #[arg(long)]
     pub detail: bool,
+
+    /// Exclude basic-economy fares from results.
+    #[arg(long)]
+    pub exclude_basic: bool,
 }
 
 pub async fn cmd_search(args: SearchArgs, client: &ApiClient) -> Result<()> {
@@ -68,6 +72,7 @@ pub async fn cmd_search(args: SearchArgs, client: &ApiClient) -> Result<()> {
     if let Some(mins) = args.max_layover {
         config.stopover_max = StopoverDuration::Minutes(mins);
     }
+    config.exclude_basic_economy = args.exclude_basic;
 
     let results = client.request_flights(&config).await?;
     // Strict "via": Google's other_flights container leaks non-stops that skip
