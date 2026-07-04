@@ -6,16 +6,21 @@
 //! `Config`/`ExploreConfig`, calls the corresponding `ApiClient` method, and
 //! returns the serialized result. No new business logic lives here.
 //!
-//! Supported tools: `search`, `price_graph`, `cheapest_dates`, `explore`, `deals`.
+//! Supported tools: `search`, `price_graph`, `cheapest_dates`, `explore`,
+//! `deals`, `date_grid`, `offer`, `multi_city`.
 
 use anyhow::Result;
 use chrono::{Months, NaiveDate};
+use clap::ValueEnum;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Stdout};
 
-use gflights::parsers::common::{Location, PlaceType, StopOptions, TravelClass, Travelers};
+use gflights::parsers::common::{
+    AirlineFilter, FlightTimes, Location, PlaceType, SortOrder, StopOptions, StopoverDuration,
+    TravelClass, Travelers,
+};
 use gflights::requests::api::ApiClient;
-use gflights::requests::config::{Config, DealConfig, ExploreConfig, ExploreDate};
+use gflights::requests::config::{Config, DealConfig, ExploreConfig, ExploreDate, MultiCityConfig};
 
 /// MCP protocol revision this server implements.
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -127,21 +132,40 @@ async fn send_error(out: &mut Stdout, id: Value, code: i64, message: &str) -> Re
 // ---------------------------------------------------------------------------
 
 fn tool_catalog() -> Vec<Value> {
-    let route_props = json!({
+    // Full route + filter schema, shared by `search` and `offer`.
+    let search_props = json!({
         "from": { "type": "string", "description": "Departure IATA code or city name" },
         "to": { "type": "string", "description": "Destination IATA code or city name" },
         "date": { "type": "string", "description": "Departure date YYYY-MM-DD" },
         "return_date": { "type": "string", "description": "Return date YYYY-MM-DD (omit for one-way)" },
         "adults": { "type": "integer", "minimum": 1, "default": 1 },
+        "children": { "type": "integer", "minimum": 0, "default": 0 },
+        "infants_seat": { "type": "integer", "minimum": 0, "default": 0 },
+        "infants_lap": { "type": "integer", "minimum": 0, "default": 0 },
         "class": { "type": "string", "enum": ["economy", "premium-economy", "business", "first"] },
-        "stops": { "type": "string", "enum": ["all", "nonstop", "one-stop"] }
+        "stops": { "type": "string", "enum": ["all", "nonstop", "one-stop"] },
+        "sort": { "type": "string", "enum": ["top-flights", "best", "price", "departure-time", "arrival-time", "duration", "emissions"] },
+        "min_layover": { "type": "integer", "minimum": 0, "description": "Minimum layover in minutes" },
+        "max_layover": { "type": "integer", "minimum": 0, "description": "Maximum layover in minutes" },
+        "lower_emissions": { "type": "boolean", "default": false, "description": "Restrict to lower-CO₂ flights" },
+        "airlines": { "type": "array", "items": { "type": "string" }, "description": "Include only these airlines/alliances (IATA code, or ONEWORLD/SKYTEAM/STAR_ALLIANCE)" },
+        "exclude_airlines": { "type": "array", "items": { "type": "string" }, "description": "Exclude these airlines/alliances" },
+        "via": { "type": "array", "items": { "type": "string" }, "description": "Require a connection through these IATA airport codes" },
+        "exclude_basic": { "type": "boolean", "default": false, "description": "Exclude basic-economy fares" },
+        "time": { "type": "string", "description": "Departure time window as HH-HH (24h), e.g. 6-22" },
+        "arr_time": { "type": "string", "description": "Arrival time window as HH-HH" },
+        "ret_time": { "type": "string", "description": "Return departure time window as HH-HH" },
+        "ret_arr_time": { "type": "string", "description": "Return arrival time window as HH-HH" },
+        "bags": { "type": "integer", "minimum": 0, "maximum": 2, "description": "Minimum checked bags included" },
+        "carry_on": { "type": "integer", "minimum": 0, "maximum": 2, "description": "Minimum carry-on bags included" },
+        "max_price": { "type": "integer", "description": "Maximum total price in the search currency" }
     });
 
     vec![
         json!({
             "name": "search",
             "description": "Search flights for a route and date (one-way or round-trip). Returns itineraries with price, stops, duration, and legs.",
-            "inputSchema": { "type": "object", "properties": route_props, "required": ["from", "to", "date"] }
+            "inputSchema": { "type": "object", "properties": search_props.clone(), "required": ["from", "to", "date"] }
         }),
         json!({
             "name": "price_graph",
@@ -204,6 +228,63 @@ fn tool_catalog() -> Vec<Value> {
                 "required": ["from", "out", "ret"]
             }
         }),
+        json!({
+            "name": "date_grid",
+            "description": "Price grid over a range of departure and return dates. Returns the cheapest fare for each (departure, return) date pair.",
+            "inputSchema": {
+                "type": "object",
+                "properties": json!({
+                    "from": { "type": "string", "description": "Departure IATA code or city name" },
+                    "to": { "type": "string", "description": "Destination IATA code or city name" },
+                    "dep_start": { "type": "string", "description": "Earliest departure date YYYY-MM-DD" },
+                    "dep_end": { "type": "string", "description": "Latest departure date YYYY-MM-DD" },
+                    "ret_start": { "type": "string", "description": "Earliest return date YYYY-MM-DD" },
+                    "ret_end": { "type": "string", "description": "Latest return date YYYY-MM-DD" },
+                    "adults": { "type": "integer", "minimum": 1, "default": 1 },
+                    "class": { "type": "string", "enum": ["economy", "premium-economy", "business", "first"] },
+                    "stops": { "type": "string", "enum": ["all", "nonstop", "one-stop"] }
+                }),
+                "required": ["from", "to", "dep_start", "dep_end", "ret_start", "ret_end"]
+            }
+        }),
+        json!({
+            "name": "offer",
+            "description": "Booking offers for the cheapest itinerary on a route (one-way or round-trip): airlines, total price, and booking tokens per channel. Accepts the same filters as search.",
+            "inputSchema": { "type": "object", "properties": search_props.clone(), "required": ["from", "to", "date"] }
+        }),
+        json!({
+            "name": "multi_city",
+            "description": "Multi-city / open-jaw search across 2 or more legs. Returns itineraries with price, stops, duration, and legs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": json!({
+                    "legs": {
+                        "type": "array",
+                        "minItems": 2,
+                        "description": "Ordered flight legs (2 or more)",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "from": { "type": "string", "description": "Departure IATA code or city name" },
+                                "to": { "type": "string", "description": "Destination IATA code or city name" },
+                                "date": { "type": "string", "description": "Departure date YYYY-MM-DD" }
+                            },
+                            "required": ["from", "to", "date"]
+                        }
+                    },
+                    "adults": { "type": "integer", "minimum": 1, "default": 1 },
+                    "children": { "type": "integer", "minimum": 0, "default": 0 },
+                    "infants_seat": { "type": "integer", "minimum": 0, "default": 0 },
+                    "infants_lap": { "type": "integer", "minimum": 0, "default": 0 },
+                    "class": { "type": "string", "enum": ["economy", "premium-economy", "business", "first"] },
+                    "sort": { "type": "string", "enum": ["top-flights", "best", "price", "departure-time", "arrival-time", "duration", "emissions"] },
+                    "max_price": { "type": "integer", "description": "Maximum total price in the search currency" },
+                    "bags": { "type": "integer", "minimum": 0, "maximum": 2 },
+                    "carry_on": { "type": "integer", "minimum": 0, "maximum": 2 }
+                }),
+                "required": ["legs"]
+            }
+        }),
     ]
 }
 
@@ -227,6 +308,9 @@ async fn handle_tool_call(
         "cheapest_dates" => tool_cheapest_dates(&args, client).await,
         "explore" => tool_explore(&args, client).await,
         "deals" => tool_deals(&args, client).await,
+        "date_grid" => tool_date_grid(&args, client).await,
+        "offer" => tool_offer(&args, client).await,
+        "multi_city" => tool_multi_city(&args, client).await,
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -273,8 +357,80 @@ fn parse_stops(s: &str) -> std::result::Result<StopOptions, String> {
     }
 }
 
-fn travelers_for(adults: u32) -> std::result::Result<Travelers, String> {
-    Travelers::new(vec![adults as i32, 0, 0, 0]).map_err(|e| e.to_string())
+/// Build `Travelers` from `adults` / `children` / `infants_seat` / `infants_lap`
+/// arguments (missing counts default to 0, adults to 1). The `Travelers::new`
+/// order is `[adults, children, infant_on_lap, infant_in_seat]`.
+fn travelers_from(args: &Value) -> std::result::Result<Travelers, String> {
+    let adults = opt_u32(args, "adults").unwrap_or(1) as i32;
+    let children = opt_u32(args, "children").unwrap_or(0) as i32;
+    let infants_lap = opt_u32(args, "infants_lap").unwrap_or(0) as i32;
+    let infants_seat = opt_u32(args, "infants_seat").unwrap_or(0) as i32;
+    Travelers::new(vec![adults, children, infants_lap, infants_seat]).map_err(|e| e.to_string())
+}
+
+fn opt_str_array(args: &Value, key: &str) -> Vec<String> {
+    args.get(key)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_airlines(items: &[String]) -> std::result::Result<Vec<AirlineFilter>, String> {
+    items
+        .iter()
+        .map(|s| {
+            s.parse::<AirlineFilter>()
+                .map_err(|e| format!("invalid airline {s:?}: {e}"))
+        })
+        .collect()
+}
+
+fn parse_sort(s: &str) -> std::result::Result<SortOrder, String> {
+    SortOrder::from_str(s, true).map_err(|e| format!("unknown sort {s:?}: {e}"))
+}
+
+/// Parse a `"HH-HH"` 24-hour window into `(min_hour, max_hour)`.
+fn parse_time_window(s: &str) -> std::result::Result<(u32, u32), String> {
+    let (lo, hi) = s
+        .split_once('-')
+        .ok_or_else(|| format!("invalid time window {s:?}, expected HH-HH"))?;
+    let lo = lo
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| format!("invalid time window {s:?}, expected HH-HH"))?;
+    let hi = hi
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| format!("invalid time window {s:?}, expected HH-HH"))?;
+    Ok((lo, hi))
+}
+
+/// Assemble a `FlightTimes` from an optional departure window (`dep_key`) and an
+/// optional arrival window (`arr_key`). Returns `None` when neither is present;
+/// a missing side is left unrestricted (`0, 0`).
+fn flight_times(
+    args: &Value,
+    dep_key: &str,
+    arr_key: &str,
+) -> std::result::Result<Option<FlightTimes>, String> {
+    let dep = opt_str(args, dep_key);
+    let arr = opt_str(args, arr_key);
+    if dep.is_none() && arr.is_none() {
+        return Ok(None);
+    }
+    let (dmin, dmax) = match dep {
+        Some(s) => parse_time_window(&s)?,
+        None => (0, 0),
+    };
+    let (amin, amax) = match arr {
+        Some(s) => parse_time_window(&s)?,
+        None => (0, 0),
+    };
+    Ok(Some(FlightTimes::new(dmin, dmax, amin, amax)))
 }
 
 /// Build a route `Config` from the common argument set shared by search,
@@ -288,7 +444,6 @@ async fn build_route_config(
     let from = req_str(args, "from")?;
     let to = req_str(args, "to")?;
     let date = parse_date(&req_str(args, "date")?)?;
-    let adults = opt_u32(args, "adults").unwrap_or(1);
 
     let mut b = Config::builder()
         .departure(&from, client)
@@ -298,7 +453,7 @@ async fn build_route_config(
         .await
         .map_err(|e| e.to_string())?
         .departing_date(date)
-        .travelers(travelers_for(adults)?);
+        .travelers(travelers_from(args)?);
 
     if let Some(c) = opt_str(args, "class") {
         b = b.travel_class(parse_class(&c)?);
@@ -310,6 +465,57 @@ async fn build_route_config(
         if let Some(ret) = opt_str(args, "return_date") {
             b = b.return_date(parse_date(&ret)?);
         }
+    }
+
+    // Optional filters — applied only when the argument is present.
+    if let Some(s) = opt_str(args, "sort") {
+        b = b.sort_order(parse_sort(&s)?);
+    }
+    if let Some(m) = opt_u32(args, "min_layover") {
+        b = b.stopover_min(StopoverDuration::Minutes(m));
+    }
+    if let Some(m) = opt_u32(args, "max_layover") {
+        b = b.stopover_max(StopoverDuration::Minutes(m));
+    }
+    if args
+        .get("lower_emissions")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        b = b.lower_emissions(true);
+    }
+    let airlines = opt_str_array(args, "airlines");
+    if !airlines.is_empty() {
+        b = b.airlines_include(parse_airlines(&airlines)?);
+    }
+    let exclude_airlines = opt_str_array(args, "exclude_airlines");
+    if !exclude_airlines.is_empty() {
+        b = b.airlines_exclude(parse_airlines(&exclude_airlines)?);
+    }
+    let via = opt_str_array(args, "via");
+    if !via.is_empty() {
+        b = b.connecting_airports(via);
+    }
+    if args
+        .get("exclude_basic")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        b = b.exclude_basic_economy(true);
+    }
+    if let Some(t) = flight_times(args, "time", "arr_time")? {
+        b = b.departing_times(t);
+    }
+    if let Some(t) = flight_times(args, "ret_time", "ret_arr_time")? {
+        b = b.return_times(t);
+    }
+    let bags = opt_u32(args, "bags");
+    let carry_on = opt_u32(args, "carry_on");
+    if bags.is_some() || carry_on.is_some() {
+        b = b.baggage(carry_on.unwrap_or(0) as u8, bags.unwrap_or(0) as u8);
+    }
+    if let Some(p) = args.get("max_price").and_then(|v| v.as_i64()) {
+        b = b.max_price(p as i32);
     }
 
     b.build().map_err(|e| e.to_string())
@@ -373,14 +579,13 @@ async fn tool_explore(args: &Value, client: &ApiClient) -> std::result::Result<S
         location_name: None,
     });
     let trip_date = opt_u32(args, "month").map(|m| ExploreDate { month: m as u8 });
-    let adults = opt_u32(args, "adults").unwrap_or(1);
 
     let config = ExploreConfig {
         origin: vec![origin],
         destination,
         trip_date,
         max_price: opt_u32(args, "budget").map(|b| b as i32),
-        travellers: travelers_for(adults)?,
+        travellers: travelers_from(args)?,
         ..Default::default()
     };
 
@@ -396,7 +601,6 @@ async fn tool_deals(args: &Value, client: &ApiClient) -> std::result::Result<Str
     let from = req_str(args, "from")?;
     let out = parse_date(&req_str(args, "out")?)?;
     let ret = parse_date(&req_str(args, "ret")?)?;
-    let adults = opt_u32(args, "adults").unwrap_or(1);
     let class = match opt_str(args, "class") {
         Some(c) => parse_class(&c)?,
         None => TravelClass::Economy,
@@ -416,13 +620,127 @@ async fn tool_deals(args: &Value, client: &ApiClient) -> std::result::Result<Str
             .unwrap_or(false),
         max_duration_minutes: opt_u32(args, "max_hours").map(|h| h * 60),
         travel_class: class,
-        travellers: travelers_for(adults)?,
+        travellers: travelers_from(args)?,
     };
     let deals = client
         .request_deals(&config)
         .await
         .map_err(|e| e.to_string())?;
     serde_json::to_string(&deals).map_err(|e| e.to_string())
+}
+
+async fn tool_date_grid(args: &Value, client: &ApiClient) -> std::result::Result<String, String> {
+    let from = req_str(args, "from")?;
+    let to = req_str(args, "to")?;
+    let dep_start = parse_date(&req_str(args, "dep_start")?)?;
+    let dep_end = parse_date(&req_str(args, "dep_end")?)?;
+    let ret_start = parse_date(&req_str(args, "ret_start")?)?;
+    let ret_end = parse_date(&req_str(args, "ret_end")?)?;
+
+    let mut b = Config::builder()
+        .departure(&from, client)
+        .await
+        .map_err(|e| e.to_string())?
+        .destination(&to, client)
+        .await
+        .map_err(|e| e.to_string())?
+        .departing_date(dep_start)
+        .return_date(ret_end)
+        .travelers(travelers_from(args)?);
+    if let Some(c) = opt_str(args, "class") {
+        b = b.travel_class(parse_class(&c)?);
+    }
+    if let Some(s) = opt_str(args, "stops") {
+        b = b.stop_options(parse_stops(&s)?);
+    }
+    let config = b.build().map_err(|e| e.to_string())?;
+
+    let grid = client
+        .request_date_grid(&config, dep_start, dep_end, ret_start, ret_end)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&grid).map_err(|e| e.to_string())
+}
+
+async fn tool_offer(args: &Value, client: &ApiClient) -> std::result::Result<String, String> {
+    let config = build_route_config(args, client, true).await?;
+
+    let result = client
+        .request_flights(&config)
+        .await
+        .map_err(|e| e.to_string())?;
+    let first = result
+        .get_all_flights()
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no flights found to price".to_string())?;
+    config
+        .fixed_flights
+        .add_element(first)
+        .map_err(|e| e.to_string())?;
+
+    // Round trip: also lock in the cheapest return leg.
+    if config.return_date.is_some() {
+        let second = client
+            .request_flights(&config)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(ret) = second.get_all_flights().into_iter().next() {
+            config
+                .fixed_flights
+                .add_element(ret)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    let offers = client
+        .request_offer(&config)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&offers.response).map_err(|e| e.to_string())
+}
+
+async fn tool_multi_city(args: &Value, client: &ApiClient) -> std::result::Result<String, String> {
+    let legs = args
+        .get("legs")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "missing 'legs' array".to_string())?;
+    if legs.len() < 2 {
+        return Err("multi_city requires at least 2 legs".to_string());
+    }
+
+    let mut builder = MultiCityConfig::builder().travellers(travelers_from(args)?);
+    if let Some(c) = opt_str(args, "class") {
+        builder = builder.travel_class(parse_class(&c)?);
+    }
+    if let Some(s) = opt_str(args, "sort") {
+        builder = builder.sort_order(parse_sort(&s)?);
+    }
+    if let Some(p) = args.get("max_price").and_then(|v| v.as_i64()) {
+        builder = builder.max_price(p as i32);
+    }
+    let bags = opt_u32(args, "bags");
+    let carry_on = opt_u32(args, "carry_on");
+    if bags.is_some() || carry_on.is_some() {
+        builder = builder.baggage(carry_on.unwrap_or(0) as u8, bags.unwrap_or(0) as u8);
+    }
+
+    for (i, leg) in legs.iter().enumerate() {
+        let from = req_str(leg, "from").map_err(|e| format!("leg {i}: {e}"))?;
+        let to = req_str(leg, "to").map_err(|e| format!("leg {i}: {e}"))?;
+        let date = parse_date(&req_str(leg, "date").map_err(|e| format!("leg {i}: {e}"))?)?;
+        builder = builder
+            .add_leg(&from, &to, date, client)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    let config = builder.build().map_err(|e| e.to_string())?;
+    let flights = client
+        .request_multi_city_flights(&config)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&flights.get_all_flights()).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -440,6 +758,53 @@ mod tests {
         assert!(names.contains(&"cheapest_dates".to_string()));
         assert!(names.contains(&"explore".to_string()));
         assert!(names.contains(&"deals".to_string()));
+        assert!(names.contains(&"date_grid".to_string()));
+        assert!(names.contains(&"offer".to_string()));
+        assert!(names.contains(&"multi_city".to_string()));
+    }
+
+    #[test]
+    fn search_schema_advertises_full_filter_set() {
+        let search = tool_catalog()
+            .into_iter()
+            .find(|t| t["name"] == "search")
+            .expect("search tool present");
+        let props = &search["inputSchema"]["properties"];
+        for key in [
+            "sort",
+            "min_layover",
+            "max_layover",
+            "lower_emissions",
+            "airlines",
+            "exclude_airlines",
+            "via",
+            "exclude_basic",
+            "time",
+            "arr_time",
+            "ret_time",
+            "ret_arr_time",
+            "bags",
+            "carry_on",
+            "max_price",
+            "children",
+            "infants_seat",
+            "infants_lap",
+        ] {
+            assert!(props.get(key).is_some(), "search schema missing {key}");
+        }
+    }
+
+    #[test]
+    fn multi_city_schema_requires_legs_array() {
+        let mc = tool_catalog()
+            .into_iter()
+            .find(|t| t["name"] == "multi_city")
+            .expect("multi_city tool present");
+        assert_eq!(
+            mc["inputSchema"]["properties"]["legs"]["type"].as_str(),
+            Some("array")
+        );
+        assert_eq!(mc["inputSchema"]["required"][0].as_str(), Some("legs"));
     }
 
     #[test]
@@ -479,6 +844,31 @@ mod tests {
         assert!(parse_class("zzz").is_err());
         assert!(parse_stops("nonstop").is_ok());
         assert!(parse_stops("zzz").is_err());
+        assert!(parse_sort("emissions").is_ok());
+        assert!(parse_sort("top-flights").is_ok());
+        assert!(parse_sort("zzz").is_err());
+        assert_eq!(parse_time_window("6-22").unwrap(), (6, 22));
+        assert!(parse_time_window("nope").is_err());
+        assert!(parse_airlines(&["LX".to_string(), "ONEWORLD".to_string()]).is_ok());
+        assert!(parse_airlines(&["".to_string()]).is_err());
+    }
+
+    #[test]
+    fn travelers_from_reads_all_counts() {
+        let v = json!({ "adults": 2, "children": 1, "infants_seat": 1 });
+        let t = travelers_from(&v).unwrap();
+        assert_eq!(t.adults, 2);
+        assert_eq!(t.children, 1);
+        assert_eq!(t.infant_in_seat, 1);
+        // Missing adults defaults to 1.
+        assert_eq!(travelers_from(&json!({})).unwrap().adults, 1);
+    }
+
+    #[test]
+    fn opt_str_array_reads_string_lists() {
+        let v = json!({ "via": ["ZRH", "MUC"] });
+        assert_eq!(opt_str_array(&v, "via"), vec!["ZRH", "MUC"]);
+        assert!(opt_str_array(&v, "missing").is_empty());
     }
 
     #[test]
