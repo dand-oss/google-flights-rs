@@ -20,7 +20,10 @@ use gflights::parsers::common::{
     TravelClass, Travelers,
 };
 use gflights::requests::api::ApiClient;
-use gflights::requests::config::{Config, DealConfig, ExploreConfig, ExploreDate, MultiCityConfig};
+use gflights::requests::config::explore::resolve_interest;
+use gflights::requests::config::{
+    Config, DealConfig, ExploreConfig, ExploreDate, ExploreDuration, MultiCityConfig,
+};
 
 /// MCP protocol revision this server implements.
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -190,7 +193,8 @@ fn tool_catalog() -> Vec<Value> {
                     "from": { "type": "string" }, "to": { "type": "string" },
                     "date": { "type": "string", "description": "Start date YYYY-MM-DD" },
                     "months": { "type": "integer", "minimum": 1, "default": 3 },
-                    "adults": { "type": "integer", "minimum": 1, "default": 1 }
+                    "adults": { "type": "integer", "minimum": 1, "default": 1 },
+                    "class": { "type": "string", "enum": ["economy", "premium-economy", "business", "first"] }
                 }),
                 "required": ["from", "to", "date"]
             }
@@ -205,22 +209,32 @@ fn tool_catalog() -> Vec<Value> {
                     "date": { "type": "string", "description": "Earliest departure date YYYY-MM-DD" },
                     "months": { "type": "integer", "minimum": 1, "default": 3 },
                     "trip_days": { "type": "integer", "description": "Round-trip length in nights; omit for one-way" },
-                    "adults": { "type": "integer", "minimum": 1, "default": 1 }
+                    "adults": { "type": "integer", "minimum": 1, "default": 1 },
+                    "class": { "type": "string", "enum": ["economy", "premium-economy", "business", "first"] }
                 }),
                 "required": ["from", "to", "date"]
             }
         }),
         json!({
             "name": "explore",
-            "description": "Explore cheap destinations from an origin airport. Optional destination airport, travel month, and budget.",
+            "description": "Explore cheap destinations from an origin airport. Optional destination airport, travel month, duration, interest, budget, and traveler/cabin filters.",
             "inputSchema": {
                 "type": "object",
                 "properties": json!({
                     "from": { "type": "string", "description": "Origin IATA code" },
                     "to": { "type": "string", "description": "Optional destination IATA code" },
                     "month": { "type": "integer", "minimum": 1, "maximum": 12 },
-                    "budget": { "type": "integer", "description": "Max price in the chosen currency" },
-                    "adults": { "type": "integer", "minimum": 1, "default": 1 }
+                    "duration": { "type": "string", "enum": ["weekend", "week", "2-weeks"], "default": "week", "description": "Trip length" },
+                    "interest": { "type": "string", "description": "Interest category name (e.g. beaches) or Knowledge-Graph MID (e.g. /m/01rwk)" },
+                    "budget": { "type": "integer", "description": "Max total price in the chosen currency" },
+                    "max_flight_hours": { "type": "integer", "minimum": 0, "description": "Max one-way flight duration in hours" },
+                    "carry_on": { "type": "integer", "minimum": 0, "maximum": 2 },
+                    "checked": { "type": "integer", "minimum": 0, "maximum": 2 },
+                    "class": { "type": "string", "enum": ["economy", "premium-economy", "business", "first"] },
+                    "adults": { "type": "integer", "minimum": 1, "default": 1 },
+                    "children": { "type": "integer", "minimum": 0, "default": 0 },
+                    "infants_seat": { "type": "integer", "minimum": 0, "default": 0 },
+                    "infants_lap": { "type": "integer", "minimum": 0, "default": 0 }
                 }),
                 "required": ["from"]
             }
@@ -237,7 +251,10 @@ fn tool_catalog() -> Vec<Value> {
                     "nonstop": { "type": "boolean", "default": false },
                     "max_hours": { "type": "integer", "description": "Max one-way duration in hours" },
                     "class": { "type": "string", "enum": ["economy", "premium-economy", "business", "first"] },
-                    "adults": { "type": "integer", "minimum": 1, "default": 1 }
+                    "adults": { "type": "integer", "minimum": 1, "default": 1 },
+                    "children": { "type": "integer", "minimum": 0, "default": 0 },
+                    "infants_seat": { "type": "integer", "minimum": 0, "default": 0 },
+                    "infants_lap": { "type": "integer", "minimum": 0, "default": 0 }
                 }),
                 "required": ["from", "out", "ret"]
             }
@@ -350,6 +367,16 @@ fn opt_u32(args: &Value, key: &str) -> Option<u32> {
 
 fn opt_bool(args: &Value, key: &str) -> Option<bool> {
     args.get(key).and_then(|v| v.as_bool())
+}
+
+/// Map an optional `duration` argument to an explore trip length, defaulting to
+/// one week (matching the CLI `explore` default).
+fn parse_duration(args: &Value) -> ExploreDuration {
+    match opt_str(args, "duration").as_deref() {
+        Some("weekend") => ExploreDuration::Weekend,
+        Some("2-weeks") | Some("two-weeks") => ExploreDuration::TwoWeeks,
+        _ => ExploreDuration::OneWeek,
+    }
 }
 
 fn parse_date(s: &str) -> std::result::Result<NaiveDate, String> {
@@ -600,13 +627,30 @@ async fn tool_explore(args: &Value, client: &ApiClient) -> std::result::Result<S
         location_name: None,
     });
     let trip_date = opt_u32(args, "month").map(|m| ExploreDate { month: m as u8 });
+    let interest = match opt_str(args, "interest").as_deref() {
+        Some(raw) => Some(resolve_interest(raw).map_err(|e| e.to_string())?),
+        None => None,
+    };
+    let baggage = match (opt_u32(args, "carry_on"), opt_u32(args, "checked")) {
+        (None, None) => None,
+        (c, k) => Some((c.unwrap_or(0) as u8, k.unwrap_or(0) as u8)),
+    };
+    let travel_class = match opt_str(args, "class") {
+        Some(c) => parse_class(&c)?,
+        None => TravelClass::Economy,
+    };
 
     let config = ExploreConfig {
         origin: vec![origin],
         destination,
         trip_date,
+        trip_duration: parse_duration(args),
         max_price: opt_u32(args, "budget").map(|b| b as i32),
+        interest,
+        max_flight_duration_minutes: opt_u32(args, "max_flight_hours").map(|h| h * 60),
+        baggage,
         travellers: travelers_from(args)?,
+        travel_class,
         ..Default::default()
     };
 
@@ -958,5 +1002,75 @@ mod tests {
         assert_eq!(opt_bool(&json!({}), "flag"), None);
         // Non-boolean values are not coerced.
         assert_eq!(opt_bool(&json!({ "flag": "yes" }), "flag"), None);
+    }
+
+    #[test]
+    fn route_tools_advertise_class_and_travelers() {
+        let cat = tool_catalog();
+        let pg = cat
+            .iter()
+            .find(|t| t["name"] == "price_graph")
+            .expect("price_graph tool present");
+        let cd = cat
+            .iter()
+            .find(|t| t["name"] == "cheapest_dates")
+            .expect("cheapest_dates tool present");
+        let dl = cat
+            .iter()
+            .find(|t| t["name"] == "deals")
+            .expect("deals tool present");
+        assert!(
+            pg["inputSchema"]["properties"].get("class").is_some(),
+            "price_graph should advertise class"
+        );
+        assert!(
+            cd["inputSchema"]["properties"].get("class").is_some(),
+            "cheapest_dates should advertise class"
+        );
+        for k in ["children", "infants_seat", "infants_lap"] {
+            assert!(
+                dl["inputSchema"]["properties"].get(k).is_some(),
+                "deals should advertise {k}"
+            );
+        }
+    }
+
+    #[test]
+    fn explore_schema_advertises_full_filter_set() {
+        let ex = tool_catalog()
+            .into_iter()
+            .find(|t| t["name"] == "explore")
+            .expect("explore tool present");
+        let props = &ex["inputSchema"]["properties"];
+        for key in [
+            "duration",
+            "interest",
+            "max_flight_hours",
+            "carry_on",
+            "checked",
+            "class",
+            "children",
+            "infants_seat",
+            "infants_lap",
+        ] {
+            assert!(props.get(key).is_some(), "explore schema missing {key}");
+        }
+    }
+
+    #[test]
+    fn parse_duration_maps_strings() {
+        assert_eq!(parse_duration(&json!({})).as_wire_code(), 2); // default = 1 week
+        assert_eq!(
+            parse_duration(&json!({ "duration": "weekend" })).as_wire_code(),
+            1
+        );
+        assert_eq!(
+            parse_duration(&json!({ "duration": "2-weeks" })).as_wire_code(),
+            3
+        );
+        assert_eq!(
+            parse_duration(&json!({ "duration": "week" })).as_wire_code(),
+            2
+        );
     }
 }
