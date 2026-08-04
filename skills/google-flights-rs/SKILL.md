@@ -28,7 +28,7 @@ Currency values are spelled out: `us-dollar`, `thai-baht`, `japanese-yen`, `euro
 ```bash
 gflights search --from BKK --to NRT --date 2026-10-09          # flights on a date
 gflights cheap  --from BKK --to NRT --date 2026-10-01 --months 1   # cheapest dates
-gflights offer  --from BKK --to NRT --date 2026-10-09          # booking URLs + provider prices
+gflights offer  --from BKK --to NRT --date 2026-10-09          # booking URLs + provider prices; --open launches the cheapest in your browser
 gflights graph  --from BKK --to NRT --date 2026-10-09 --months 3   # price per day
 gflights dgrid  --from A --to B --dep-start .. --dep-end .. --ret-start .. --ret-end ..
 gflights deals  --from BKK --out 2026-10-09 --ret 2026-10-16   # discounted destinations
@@ -104,7 +104,9 @@ exactly N nights. Omit it for one-way date discovery.
 4. For international trips, also quote business alongside economy so the upgrade
    delta is visible. Skip that for short domestic hops unless asked.
 5. Once the user chooses a flight, call `offer` for airline and OTA prices. Use
-   CLI `offer` when the user needs resolved booking URLs.
+   CLI `offer` when the user needs resolved booking URLs. Add `--open` to
+   launch the cheapest offer's booking page in the default browser — no
+   copy-paste. It works with both table and `--format json` output.
 
 ## Ranking Results
 
