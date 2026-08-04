@@ -59,7 +59,8 @@ interactive picker and will hang a non-interactive session.
 The same binary runs an MCP stdio server. It exposes `search`, `price_graph`,
 `cheapest_dates`, `explore`, `deals`, `date_grid`, `offer`, and `multi_city`.
 The `search` and `offer` tools accept the full search filter set. `search` also
-takes `priced_only` (drop itineraries without a bookable price); `offer` also
+takes `priced_only` (drop itineraries without a bookable price) and `web_url`
+(return only the browsable Google Flights URL, no API call); `offer` also
 takes `open` (resolve the cheapest booking URL and launch it in the host's
 default browser). Give MCP users this configuration and set their locale at
 startup:
@@ -86,7 +87,8 @@ Key CLI `search` flags: `--return YYYY-MM-DD` for round trips,
 and `--ret-arr-time` for the other windows, `--bags 0-2` checked bags folded into the
 displayed price, `--carry-on 0-2` likewise, `--max-price N`, `--exclude-basic` to drop
 basic-economy fares, `--priced-only` to drop itineraries Google returned without a bookable
-price, `--airline LX` or `--airline ONEWORLD` to include an airline or
+price, `--web-url` to print the browsable Google Flights URL for the search and exit (no API
+call), `--airline LX` or `--airline ONEWORLD` to include an airline or
 alliance. Repeat `--airline` and `--exclude-airline` as needed. Use `--via CDG` to require a
 connection airport, `--min-layover MIN` and `--max-layover MIN` rounded up to
 30-minute steps, `--lower-emissions`, `--show-co2`, and `--detail` for layover

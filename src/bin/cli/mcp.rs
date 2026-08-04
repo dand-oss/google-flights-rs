@@ -171,6 +171,11 @@ fn tool_catalog() -> Vec<Value> {
         "default": false,
         "description": "Omit itineraries returned without a bookable price"
     });
+    search_input["web_url"] = json!({
+        "type": "boolean",
+        "default": false,
+        "description": "Return only the browsable Google Flights URL for this search (no API call)"
+    });
     let mut offer_input = search_props.clone();
     offer_input["open"] = json!({
         "type": "boolean",
@@ -572,6 +577,9 @@ async fn build_route_config(
 
 async fn tool_search(args: &Value, client: &ApiClient) -> std::result::Result<String, String> {
     let config = build_route_config(args, client, true).await?;
+    if opt_bool(args, "web_url").unwrap_or(false) {
+        return Ok(config.to_flight_url());
+    }
     let res = client
         .request_flights(&config)
         .await
@@ -887,6 +895,7 @@ mod tests {
             "carry_on",
             "max_price",
             "priced_only",
+            "web_url",
             "children",
             "infants_seat",
             "infants_lap",

@@ -106,12 +106,26 @@ pub struct SearchArgs {
     /// for a clean, fully-priced list when piping or building fare tables.
     #[arg(long)]
     pub priced_only: bool,
+
+    /// Print the browsable Google Flights URL for this search and exit.
+    ///
+    /// No API call is made — the URL is built from the route, dates, travelers,
+    /// and cabin. Pipe it to `xdg-open`/`open` to launch Google Flights.
+    #[arg(long)]
+    pub web_url: bool,
 }
 
 pub async fn cmd_search(args: SearchArgs, client: &ApiClient) -> Result<()> {
     let mut config = build_config(&args.common, client)
         .await?
         .with_sort_order(args.sort);
+
+    // Short-circuit: print the browsable Google Flights URL and stop, without
+    // hitting the search API.
+    if args.web_url {
+        println!("{}", config.to_flight_url());
+        return Ok(());
+    }
 
     // Apply filter flags that live on SearchArgs rather than CommonArgs.
     config.airlines_include = args.airlines;
@@ -411,5 +425,32 @@ mod tests {
         let mut flights = vec![container(true), container(true)];
         retain_priced_only(&mut flights);
         assert_eq!(flights.len(), 2);
+    }
+
+    #[test]
+    fn web_url_defaults_off_and_parses() {
+        let a = SearchArgs::try_parse_from([
+            "search",
+            "--from",
+            "BKK",
+            "--to",
+            "KUL",
+            "--date",
+            "2026-08-11",
+        ])
+        .unwrap();
+        assert!(!a.web_url);
+        let b = SearchArgs::try_parse_from([
+            "search",
+            "--from",
+            "BKK",
+            "--to",
+            "KUL",
+            "--date",
+            "2026-08-11",
+            "--web-url",
+        ])
+        .unwrap();
+        assert!(b.web_url);
     }
 }
