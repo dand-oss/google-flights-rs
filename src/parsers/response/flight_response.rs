@@ -66,7 +66,7 @@ pub struct ItineraryCost {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TripCost {
-    unknown: Option<String>,
+    pub unknown: Option<String>,
     pub price: i32,
 }
 

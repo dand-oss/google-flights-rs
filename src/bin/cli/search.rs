@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use gflights::parsers::common::{AirlineFilter, FlightTimes, SortOrder, StopoverDuration};
+use gflights::parsers::flight_response::ItineraryContainer;
 use gflights::requests::api::ApiClient;
 
 use super::{build_config, CommonArgs, OutputFormat};
@@ -97,6 +98,14 @@ pub struct SearchArgs {
     /// Maximum total price in the result currency.
     #[arg(long)]
     pub max_price: Option<i32>,
+
+    /// Omit itineraries Google returned without a bookable price.
+    ///
+    /// Off by default: unpriced rows still carry schedule information, so they
+    /// are kept (rendered as "—", sorted last under `--sort price`). Set this
+    /// for a clean, fully-priced list when piping or building fare tables.
+    #[arg(long)]
+    pub priced_only: bool,
 }
 
 pub async fn cmd_search(args: SearchArgs, client: &ApiClient) -> Result<()> {
@@ -196,6 +205,13 @@ pub async fn cmd_search(args: SearchArgs, client: &ApiClient) -> Result<()> {
                     .map(|d| d.arrival_time.hour.unwrap_or(0) * 60 + d.arrival_time.minute)
             });
         }
+    }
+
+    // Drop itineraries Google returned without a bookable price. Applied after
+    // the sort so the priced rows keep their order; done before the empty check
+    // so a window where everything was unpriced still reports "No flights found".
+    if args.priced_only {
+        retain_priced_only(&mut flights);
     }
 
     if flights.is_empty() {
@@ -311,5 +327,89 @@ impl WithSortOrder for Config {
     fn with_sort_order(mut self, sort: SortOrder) -> Self {
         self.sort_order = sort;
         self
+    }
+}
+
+/// Keep only itineraries that carry a bookable price.
+///
+/// Unpriced itineraries (`trip_cost == None`) still carry schedule data, so the
+/// `--priced-only` flag is opt-in — the default keeps them, rendering the price
+/// as "—" and sorting them last under `--sort price`.
+fn retain_priced_only(flights: &mut Vec<ItineraryContainer>) {
+    flights.retain(|f| f.itinerary_cost.trip_cost.is_some());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gflights::parsers::flight_response::{Itinerary, ItineraryCost, TripCost};
+
+    /// Minimal itinerary container — priced when `priced` is true.
+    fn container(priced: bool) -> ItineraryContainer {
+        ItineraryContainer {
+            itinerary: Itinerary {
+                flight_by: "MH".into(),
+                flight_details: vec![],
+                total_time_minutes: 130,
+                connection_info: None,
+                emissions: None,
+                self_transfer: None,
+            },
+            itinerary_cost: ItineraryCost {
+                trip_cost: priced.then_some(TripCost {
+                    unknown: None,
+                    price: 137,
+                }),
+                departure_token: "tok".into(),
+            },
+            departure_protobuf: String::new(),
+            mixed_cabin: None,
+        }
+    }
+
+    #[test]
+    fn priced_only_defaults_off() {
+        let args = SearchArgs::try_parse_from([
+            "search",
+            "--from",
+            "BKK",
+            "--to",
+            "KUL",
+            "--date",
+            "2026-08-11",
+        ])
+        .unwrap();
+        assert!(!args.priced_only);
+    }
+
+    #[test]
+    fn priced_only_parses() {
+        let args = SearchArgs::try_parse_from([
+            "search",
+            "--from",
+            "BKK",
+            "--to",
+            "KUL",
+            "--date",
+            "2026-08-11",
+            "--priced-only",
+        ])
+        .unwrap();
+        assert!(args.priced_only);
+    }
+
+    #[test]
+    fn retain_priced_only_drops_unpriced_rows() {
+        let mut flights = vec![container(true), container(false), container(true)];
+        retain_priced_only(&mut flights);
+        assert_eq!(flights.len(), 2);
+        assert!(flights.iter().all(|f| f.itinerary_cost.trip_cost.is_some()));
+    }
+
+    #[test]
+    fn retain_priced_only_keeps_all_when_everything_priced() {
+        let mut flights = vec![container(true), container(true)];
+        retain_priced_only(&mut flights);
+        assert_eq!(flights.len(), 2);
     }
 }
