@@ -58,8 +58,11 @@ interactive picker and will hang a non-interactive session.
 
 The same binary runs an MCP stdio server. It exposes `search`, `price_graph`,
 `cheapest_dates`, `explore`, `deals`, `date_grid`, `offer`, and `multi_city`.
-The `search` and `offer` tools accept the full search filter set. Give MCP users
-this configuration and set their locale at startup:
+The `search` and `offer` tools accept the full search filter set. `search` also
+takes `priced_only` (drop itineraries without a bookable price); `offer` also
+takes `open` (resolve the cheapest booking URL and launch it in the host's
+default browser). Give MCP users this configuration and set their locale at
+startup:
 
 ```json
 {
