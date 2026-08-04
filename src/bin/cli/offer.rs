@@ -77,7 +77,16 @@ pub async fn cmd_offer(args: OfferArgs, client: &ApiClient) -> Result<()> {
 
     match args.common.format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&offers.response)?);
+            // The endpoint returns many unpopulated offer slots; emit only the
+            // real, priced offers (cheapest first) so JSON is clean to consume.
+            let mut priced: Vec<_> = offers
+                .response
+                .iter()
+                .flat_map(|r| &r.offers)
+                .filter(|o| o.price.is_some())
+                .collect();
+            priced.sort_by_key(|o| o.price.unwrap_or(i32::MAX));
+            println!("{}", serde_json::to_string_pretty(&priced)?);
         }
         OutputFormat::Table => {
             println!("{:<30}  {:>8}  URL", "AIRLINE(S)", "PRICE");
