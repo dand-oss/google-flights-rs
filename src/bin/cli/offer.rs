@@ -9,6 +9,10 @@ use super::{build_config, CommonArgs, OutputFormat};
 pub struct OfferArgs {
     #[command(flatten)]
     pub common: CommonArgs,
+
+    /// Open the cheapest offer's booking URL in the default web browser.
+    #[arg(long)]
+    pub open: bool,
 }
 
 /// Render a terminal hyperlink (OSC 8) when stdout is a TTY; plain URL otherwise.
@@ -87,5 +91,65 @@ pub async fn cmd_offer(args: OfferArgs, client: &ApiClient) -> Result<()> {
             }
         }
     }
+
+    // Optionally launch the cheapest offer's resolved booking URL in the
+    // default browser so the user can book without copy-pasting a link.
+    if args.open {
+        if let Some(top) = groups.first() {
+            match top.click_token.as_deref() {
+                Some(token) => match client.resolve_booking_url(token).await {
+                    Ok(url) => {
+                        eprintln!(
+                            "Opening {} ({}) in your browser…",
+                            top.airline_names.join(", "),
+                            top.price.unwrap_or(0)
+                        );
+                        if let Err(e) = webbrowser::open(&url) {
+                            eprintln!("could not open browser: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("could not resolve booking URL: {e}"),
+                },
+                None => eprintln!("cheapest offer has no booking token to open"),
+            }
+        }
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_defaults_off() {
+        let args = OfferArgs::try_parse_from([
+            "offer",
+            "--from",
+            "BKK",
+            "--to",
+            "KUL",
+            "--date",
+            "2026-08-11",
+        ])
+        .unwrap();
+        assert!(!args.open);
+    }
+
+    #[test]
+    fn open_parses() {
+        let args = OfferArgs::try_parse_from([
+            "offer",
+            "--from",
+            "BKK",
+            "--to",
+            "KUL",
+            "--date",
+            "2026-08-11",
+            "--open",
+        ])
+        .unwrap();
+        assert!(args.open);
+    }
 }

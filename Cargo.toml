@@ -40,6 +40,8 @@ serde_repr = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rustyline = { version = "15", default-features = false }
+# Opens a booking URL in the user's default browser via `offer --open`.
+webbrowser = "1"
 
 base64 = "0.22"
 prost = "0.13"
