@@ -556,12 +556,12 @@ mod tests {
         .expect("search with filter flags should parse");
         match rc.command {
             Commands::Search(args) => {
-                assert_eq!(args.min_layover, Some(60));
-                assert_eq!(args.max_layover, Some(180));
-                assert!(args.lower_emissions);
-                assert_eq!(args.airlines.len(), 2);
-                assert_eq!(args.exclude_airlines.len(), 1);
-                assert_eq!(args.connecting_airports, vec!["CDG"]);
+                assert_eq!(args.filters.min_layover, Some(60));
+                assert_eq!(args.filters.max_layover, Some(180));
+                assert!(args.filters.lower_emissions);
+                assert_eq!(args.filters.airlines.len(), 2);
+                assert_eq!(args.filters.exclude_airlines.len(), 1);
+                assert_eq!(args.filters.connecting_airports, vec!["CDG"]);
             }
             other => panic!("expected Search, got {other:?}"),
         }

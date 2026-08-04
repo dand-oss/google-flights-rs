@@ -22,16 +22,13 @@ fn parse_time_window(s: &str) -> Result<(u32, u32)> {
     Ok((from, to))
 }
 
-/// Arguments for the `search` subcommand.
-#[derive(Parser, Debug)]
-pub struct SearchArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-
-    /// Sort order.
-    #[arg(long, default_value = "best")]
-    pub sort: SortOrder,
-
+/// Reusable search filters shared by `search` and `offer`.
+///
+/// Held in a flattened sub-struct so both subcommands advertise the same
+/// `--airline` / `--via` / `--time` / `--max-price` / … flags and apply them
+/// identically.
+#[derive(Parser, Debug, Clone, Default)]
+pub struct SearchFilters {
     /// Minimum layover duration in minutes (rounded up to the next 30 min interval).
     #[arg(long)]
     pub min_layover: Option<u32>,
@@ -58,14 +55,6 @@ pub struct SearchArgs {
     /// May be repeated for multiple airports.
     #[arg(long = "via")]
     pub connecting_airports: Vec<String>,
-
-    /// Show a CO₂ emissions column (kg per passenger).
-    #[arg(long = "show-co2")]
-    pub show_co2: bool,
-
-    /// Show detailed info: layover airports and +1 marker for next-day arrivals.
-    #[arg(long)]
-    pub detail: bool,
 
     /// Exclude basic-economy fares from results.
     #[arg(long)]
@@ -98,6 +87,82 @@ pub struct SearchArgs {
     /// Maximum total price in the result currency.
     #[arg(long)]
     pub max_price: Option<i32>,
+}
+
+impl SearchFilters {
+    /// Apply these filters onto a [`Config`].
+    ///
+    /// `is_round_trip` gates the return-leg time windows: a return window given
+    /// without `--return` is rejected.
+    pub fn apply(self, config: &mut Config, is_round_trip: bool) -> Result<()> {
+        config.airlines_include = self.airlines;
+        config.airlines_exclude = self.exclude_airlines;
+        config.connecting_airports = self.connecting_airports;
+        config.lower_emissions = self.lower_emissions;
+        if let Some(mins) = self.min_layover {
+            config.stopover_min = StopoverDuration::Minutes(mins);
+        }
+        if let Some(mins) = self.max_layover {
+            config.stopover_max = StopoverDuration::Minutes(mins);
+        }
+        config.exclude_basic_economy = self.exclude_basic;
+
+        // Time-of-day windows. FlightTimes treats 0 as "no bound", which matches
+        // the "whole day" default when only one side of a window is given.
+        if self.time.is_some() || self.arr_time.is_some() {
+            let (dep_from, dep_to) = self.time.as_deref().map_or(Ok((0, 0)), parse_time_window)?;
+            let (arr_from, arr_to) = self
+                .arr_time
+                .as_deref()
+                .map_or(Ok((0, 0)), parse_time_window)?;
+            config.departing_times = FlightTimes::new(dep_from, dep_to, arr_from, arr_to);
+        }
+        if self.ret_time.is_some() || self.ret_arr_time.is_some() {
+            if !is_round_trip {
+                return Err(anyhow!(
+                    "--ret-time/--ret-arr-time require a round trip via --return"
+                ));
+            }
+            let (dep_from, dep_to) = self
+                .ret_time
+                .as_deref()
+                .map_or(Ok((0, 0)), parse_time_window)?;
+            let (arr_from, arr_to) = self
+                .ret_arr_time
+                .as_deref()
+                .map_or(Ok((0, 0)), parse_time_window)?;
+            config.return_times = FlightTimes::new(dep_from, dep_to, arr_from, arr_to);
+        }
+
+        // Baggage-inclusive pricing and the price cap.
+        if self.bags.is_some() || self.carry_on.is_some() {
+            config.baggage = Some((self.carry_on.unwrap_or(0), self.bags.unwrap_or(0)));
+        }
+        config.max_price = self.max_price;
+        Ok(())
+    }
+}
+
+/// Arguments for the `search` subcommand.
+#[derive(Parser, Debug)]
+pub struct SearchArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+
+    /// Sort order.
+    #[arg(long, default_value = "best")]
+    pub sort: SortOrder,
+
+    #[command(flatten)]
+    pub filters: SearchFilters,
+
+    /// Show a CO₂ emissions column (kg per passenger).
+    #[arg(long = "show-co2")]
+    pub show_co2: bool,
+
+    /// Show detailed info: layover airports and +1 marker for next-day arrivals.
+    #[arg(long)]
+    pub detail: bool,
 
     /// Omit itineraries Google returned without a bookable price.
     ///
@@ -128,50 +193,8 @@ pub async fn cmd_search(args: SearchArgs, client: &ApiClient) -> Result<()> {
     }
 
     // Apply filter flags that live on SearchArgs rather than CommonArgs.
-    config.airlines_include = args.airlines;
-    config.airlines_exclude = args.exclude_airlines;
-    config.connecting_airports = args.connecting_airports;
-    config.lower_emissions = args.lower_emissions;
-    if let Some(mins) = args.min_layover {
-        config.stopover_min = StopoverDuration::Minutes(mins);
-    }
-    if let Some(mins) = args.max_layover {
-        config.stopover_max = StopoverDuration::Minutes(mins);
-    }
-    config.exclude_basic_economy = args.exclude_basic;
-
-    // Time-of-day windows. FlightTimes treats 0 as "no bound", which matches
-    // the "whole day" default when only one side of a window is given.
-    if args.time.is_some() || args.arr_time.is_some() {
-        let (dep_from, dep_to) = args.time.as_deref().map_or(Ok((0, 0)), parse_time_window)?;
-        let (arr_from, arr_to) = args
-            .arr_time
-            .as_deref()
-            .map_or(Ok((0, 0)), parse_time_window)?;
-        config.departing_times = FlightTimes::new(dep_from, dep_to, arr_from, arr_to);
-    }
-    if args.ret_time.is_some() || args.ret_arr_time.is_some() {
-        if args.common.r#return.is_none() {
-            return Err(anyhow!(
-                "--ret-time/--ret-arr-time require a round trip via --return"
-            ));
-        }
-        let (dep_from, dep_to) = args
-            .ret_time
-            .as_deref()
-            .map_or(Ok((0, 0)), parse_time_window)?;
-        let (arr_from, arr_to) = args
-            .ret_arr_time
-            .as_deref()
-            .map_or(Ok((0, 0)), parse_time_window)?;
-        config.return_times = FlightTimes::new(dep_from, dep_to, arr_from, arr_to);
-    }
-
-    // Baggage-inclusive pricing and the price cap.
-    if args.bags.is_some() || args.carry_on.is_some() {
-        config.baggage = Some((args.carry_on.unwrap_or(0), args.bags.unwrap_or(0)));
-    }
-    config.max_price = args.max_price;
+    args.filters
+        .apply(&mut config, args.common.r#return.is_some())?;
 
     let results = client.request_flights(&config).await?;
     // Strict "via": Google's other_flights container leaks non-stops that skip

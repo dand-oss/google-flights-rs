@@ -28,7 +28,7 @@ Currency values are spelled out: `us-dollar`, `thai-baht`, `japanese-yen`, `euro
 ```bash
 gflights search --from BKK --to NRT --date 2026-10-09          # flights on a date
 gflights cheap  --from BKK --to NRT --date 2026-10-01 --months 1   # cheapest dates
-gflights offer  --from BKK --to NRT --date 2026-10-09          # booking URLs + provider prices; --open launches the cheapest in your browser
+gflights offer  --from BKK --to NRT --date 2026-10-09          # booking URLs + provider prices; accepts the search filters; --open launches the cheapest in your browser
 gflights graph  --from BKK --to NRT --date 2026-10-09 --months 3   # price per day
 gflights dgrid  --from A --to B --dep-start .. --dep-end .. --ret-start .. --ret-end ..
 gflights deals  --from BKK --out 2026-10-09 --ret 2026-10-16   # discounted destinations

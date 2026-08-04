@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use gflights::requests::api::ApiClient;
 
+use super::search::SearchFilters;
 use super::{build_config, CommonArgs, OutputFormat};
 
 /// Arguments for the `offer` subcommand.
@@ -9,6 +10,9 @@ use super::{build_config, CommonArgs, OutputFormat};
 pub struct OfferArgs {
     #[command(flatten)]
     pub common: CommonArgs,
+
+    #[command(flatten)]
+    pub filters: SearchFilters,
 
     /// Open the cheapest offer's booking URL in the default web browser.
     #[arg(long)]
@@ -30,7 +34,10 @@ fn render_link(url: &str, label: &str) -> String {
 }
 
 pub async fn cmd_offer(args: OfferArgs, client: &ApiClient) -> Result<()> {
-    let config = build_config(&args.common, client).await?;
+    let mut config = build_config(&args.common, client).await?;
+    // Offer the cheapest itinerary that survives the same filters as `search`.
+    args.filters
+        .apply(&mut config, args.common.r#return.is_some())?;
 
     let result = client.request_flights(&config).await?;
     let first_flight = result.get_all_flights().into_iter().next();
