@@ -161,11 +161,25 @@ fn tool_catalog() -> Vec<Value> {
         "max_price": { "type": "integer", "description": "Maximum total price in the search currency" }
     });
 
+    // Tool-specific options layered on top of the shared route/filter schema.
+    let mut search_input = search_props.clone();
+    search_input["priced_only"] = json!({
+        "type": "boolean",
+        "default": false,
+        "description": "Omit itineraries returned without a bookable price"
+    });
+    let mut offer_input = search_props.clone();
+    offer_input["open"] = json!({
+        "type": "boolean",
+        "default": false,
+        "description": "Open the cheapest offer's booking URL in the default browser"
+    });
+
     vec![
         json!({
             "name": "search",
             "description": "Search flights for a route and date (one-way or round-trip). Returns itineraries with price, stops, duration, and legs.",
-            "inputSchema": { "type": "object", "properties": search_props.clone(), "required": ["from", "to", "date"] }
+            "inputSchema": { "type": "object", "properties": search_input, "required": ["from", "to", "date"] }
         }),
         json!({
             "name": "price_graph",
@@ -250,7 +264,7 @@ fn tool_catalog() -> Vec<Value> {
         json!({
             "name": "offer",
             "description": "Booking offers for the cheapest itinerary on a route (one-way or round-trip): airlines, total price, and booking tokens per channel. Accepts the same filters as search.",
-            "inputSchema": { "type": "object", "properties": search_props.clone(), "required": ["from", "to", "date"] }
+            "inputSchema": { "type": "object", "properties": offer_input, "required": ["from", "to", "date"] }
         }),
         json!({
             "name": "multi_city",
@@ -332,6 +346,10 @@ fn opt_str(args: &Value, key: &str) -> Option<String> {
 
 fn opt_u32(args: &Value, key: &str) -> Option<u32> {
     args.get(key).and_then(|v| v.as_u64()).map(|n| n as u32)
+}
+
+fn opt_bool(args: &Value, key: &str) -> Option<bool> {
+    args.get(key).and_then(|v| v.as_bool())
 }
 
 fn parse_date(s: &str) -> std::result::Result<NaiveDate, String> {
@@ -531,7 +549,10 @@ async fn tool_search(args: &Value, client: &ApiClient) -> std::result::Result<St
         .request_flights(&config)
         .await
         .map_err(|e| e.to_string())?;
-    let flights = res.get_all_flights();
+    let mut flights = res.get_all_flights();
+    if opt_bool(args, "priced_only").unwrap_or(false) {
+        flights.retain(|f| f.itinerary_cost.trip_cost.is_some());
+    }
     serde_json::to_string(&flights).map_err(|e| e.to_string())
 }
 
@@ -697,6 +718,30 @@ async fn tool_offer(args: &Value, client: &ApiClient) -> std::result::Result<Str
         .request_offer(&config)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Optionally open the cheapest offer's booking URL in the default browser.
+    // Notes go to stderr so the JSON-RPC stream on stdout stays clean.
+    if opt_bool(args, "open").unwrap_or(false) {
+        let mut groups: Vec<_> = offers
+            .response
+            .iter()
+            .flat_map(|r| &r.offers)
+            .filter(|o| o.price.is_some())
+            .collect();
+        groups.sort_by_key(|o| o.price.unwrap_or(i32::MAX));
+        if let Some(token) = groups.first().and_then(|o| o.click_token.as_deref()) {
+            match client.resolve_booking_url(token).await {
+                Ok(url) => {
+                    eprintln!("Opening cheapest booking URL in your browser…");
+                    if let Err(e) = webbrowser::open(&url) {
+                        eprintln!("could not open browser: {e}");
+                    }
+                }
+                Err(e) => eprintln!("could not resolve booking URL: {e}"),
+            }
+        }
+    }
+
     serde_json::to_string(&offers.response).map_err(|e| e.to_string())
 }
 
@@ -786,6 +831,7 @@ mod tests {
             "bags",
             "carry_on",
             "max_price",
+            "priced_only",
             "children",
             "infants_seat",
             "infants_lap",
@@ -876,5 +922,41 @@ mod tests {
         let v = json!({ "from": "LHR" });
         assert_eq!(req_str(&v, "from").unwrap(), "LHR");
         assert!(req_str(&v, "to").is_err());
+    }
+
+    #[test]
+    fn tool_specific_options_land_on_correct_tools() {
+        let cat = tool_catalog();
+        let search = cat
+            .iter()
+            .find(|t| t["name"] == "search")
+            .expect("search tool present");
+        let offer = cat
+            .iter()
+            .find(|t| t["name"] == "offer")
+            .expect("offer tool present");
+        let sp = &search["inputSchema"]["properties"];
+        let op = &offer["inputSchema"]["properties"];
+        // priced_only is search-only.
+        assert!(
+            sp.get("priced_only").is_some(),
+            "search should advertise priced_only"
+        );
+        assert!(
+            op.get("priced_only").is_none(),
+            "offer should not advertise priced_only"
+        );
+        // open is offer-only.
+        assert!(op.get("open").is_some(), "offer should advertise open");
+        assert!(sp.get("open").is_none(), "search should not advertise open");
+    }
+
+    #[test]
+    fn opt_bool_reads_flags() {
+        assert_eq!(opt_bool(&json!({ "flag": true }), "flag"), Some(true));
+        assert_eq!(opt_bool(&json!({ "flag": false }), "flag"), Some(false));
+        assert_eq!(opt_bool(&json!({}), "flag"), None);
+        // Non-boolean values are not coerced.
+        assert_eq!(opt_bool(&json!({ "flag": "yes" }), "flag"), None);
     }
 }
