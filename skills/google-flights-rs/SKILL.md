@@ -46,9 +46,9 @@ interactive picker and will hang a non-interactive session.
 
 - Use MCP when the client has a connected gflights server. MCP exposes every
   non-interactive CLI action and returns structured JSON.
-- Use the CLI when MCP is unavailable or the user needs resolved booking URLs.
-  MCP `offer` returns offer groups and click tokens. CLI `offer` resolves those
-  tokens into provider URLs.
+- Use the CLI when MCP is unavailable. Both MCP `offer` and CLI `offer` resolve
+  each priced offer's click token into a provider booking URL; CLI `offer` also
+  prints the table and `--open` launches the cheapest in a browser.
 - Do not start an MCP server for a one-off shell request. Call the CLI directly.
 - Check currency and country before searching. MCP fixes both values when the
   server starts. The tool arguments cannot override them. Use the CLI when the

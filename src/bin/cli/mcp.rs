@@ -280,7 +280,7 @@ fn tool_catalog() -> Vec<Value> {
         }),
         json!({
             "name": "offer",
-            "description": "Booking offers for the cheapest itinerary on a route (one-way or round-trip): airlines, total price, and booking tokens per channel. Accepts the same filters as search.",
+            "description": "Booking offers for the cheapest itinerary on a route (one-way or round-trip): airlines, total price, and a resolved booking URL per channel. Accepts the same filters as search.",
             "inputSchema": { "type": "object", "properties": offer_input, "required": ["from", "to", "date"] }
         }),
         json!({
@@ -763,30 +763,41 @@ async fn tool_offer(args: &Value, client: &ApiClient) -> std::result::Result<Str
         .await
         .map_err(|e| e.to_string())?;
 
-    // Optionally open the cheapest offer's booking URL in the default browser.
+    // Flatten to priced offers (cheapest first) and resolve each booking URL so
+    // clients receive clickable links instead of opaque click tokens.
+    let mut groups: Vec<_> = offers
+        .response
+        .iter()
+        .flat_map(|r| &r.offers)
+        .filter(|o| o.price.is_some())
+        .collect();
+    groups.sort_by_key(|o| o.price.unwrap_or(i32::MAX));
+
+    let mut enriched: Vec<Value> = Vec::new();
+    for o in &groups {
+        let booking_url = match o.click_token.as_deref() {
+            Some(token) => client.resolve_booking_url(token).await.ok(),
+            None => None,
+        };
+        enriched.push(json!({
+            "airline_names": o.airline_names,
+            "price": o.price,
+            "booking_url": booking_url,
+        }));
+    }
+
+    // Optionally open the cheapest resolved URL in the host's default browser.
     // Notes go to stderr so the JSON-RPC stream on stdout stays clean.
     if opt_bool(args, "open").unwrap_or(false) {
-        let mut groups: Vec<_> = offers
-            .response
-            .iter()
-            .flat_map(|r| &r.offers)
-            .filter(|o| o.price.is_some())
-            .collect();
-        groups.sort_by_key(|o| o.price.unwrap_or(i32::MAX));
-        if let Some(token) = groups.first().and_then(|o| o.click_token.as_deref()) {
-            match client.resolve_booking_url(token).await {
-                Ok(url) => {
-                    eprintln!("Opening cheapest booking URL in your browser…");
-                    if let Err(e) = webbrowser::open(&url) {
-                        eprintln!("could not open browser: {e}");
-                    }
-                }
-                Err(e) => eprintln!("could not resolve booking URL: {e}"),
+        if let Some(url) = enriched.first().and_then(|o| o["booking_url"].as_str()) {
+            eprintln!("Opening cheapest booking URL in your browser…");
+            if let Err(e) = webbrowser::open(url) {
+                eprintln!("could not open browser: {e}");
             }
         }
     }
 
-    serde_json::to_string(&offers.response).map_err(|e| e.to_string())
+    serde_json::to_string(&enriched).map_err(|e| e.to_string())
 }
 
 async fn tool_multi_city(args: &Value, client: &ApiClient) -> std::result::Result<String, String> {
