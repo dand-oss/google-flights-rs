@@ -10,7 +10,7 @@
 //! `deals`, `date_grid`, `offer`, `multi_city`.
 
 use anyhow::Result;
-use chrono::{Months, NaiveDate};
+use chrono::{Datelike, Months, NaiveDate};
 use clap::ValueEnum;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Stdout};
@@ -215,7 +215,8 @@ fn tool_catalog() -> Vec<Value> {
                     "months": { "type": "integer", "minimum": 1, "default": 3 },
                     "trip_days": { "type": "integer", "description": "Round-trip length in nights; omit for one-way" },
                     "adults": { "type": "integer", "minimum": 1, "default": 1 },
-                    "class": { "type": "string", "enum": ["economy", "premium-economy", "business", "first"] }
+                    "class": { "type": "string", "enum": ["economy", "premium-economy", "business", "first"] },
+                    "weekday": { "type": "string", "description": "Keep only departures on this weekday (mon..sun or 1..7)" }
                 }),
                 "required": ["from", "to", "date"]
             }
@@ -615,10 +616,14 @@ async fn tool_cheapest_dates(
     let config = build_route_config(args, client, false).await?;
     let months = Months::new(opt_u32(args, "months").unwrap_or(3));
     let trip_days = opt_u32(args, "trip_days");
-    let results = client
+    let mut results = client
         .cheapest_dates(&config, months, trip_days)
         .await
         .map_err(|e| e.to_string())?;
+    if let Some(w) = opt_str(args, "weekday") {
+        let wd = super::cheap::parse_weekday(&w).map_err(|e| e.to_string())?;
+        results.retain(|r| r.departure_date.weekday() == wd);
+    }
     serde_json::to_string(&results).map_err(|e| e.to_string())
 }
 
@@ -1046,6 +1051,10 @@ mod tests {
         assert!(
             cd["inputSchema"]["properties"].get("class").is_some(),
             "cheapest_dates should advertise class"
+        );
+        assert!(
+            cd["inputSchema"]["properties"].get("weekday").is_some(),
+            "cheapest_dates should advertise weekday"
         );
         for k in ["children", "infants_seat", "infants_lap"] {
             assert!(

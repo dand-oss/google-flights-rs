@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Months, NaiveDate};
+use chrono::{Datelike, Months, NaiveDate, Weekday};
 use clap::Parser;
 use gflights::parsers::common::{TravelClass, Travelers};
 use gflights::requests::api::ApiClient;
@@ -38,9 +38,28 @@ pub struct CheapArgs {
     #[arg(long, default_value = "economy")]
     pub class: TravelClass,
 
+    /// Keep only departures on this weekday (mon..sun or 1..7).
+    #[arg(long)]
+    pub weekday: Option<String>,
+
     /// Output format.
     #[arg(long, default_value = "table")]
     pub format: OutputFormat,
+}
+
+/// Parse a weekday from a short name (mon..sun), full name, or number (1..7).
+pub fn parse_weekday(s: &str) -> Result<Weekday> {
+    let s = s.trim().to_lowercase();
+    match s.as_str() {
+        "mon" | "monday" | "1" => Ok(Weekday::Mon),
+        "tue" | "tues" | "tuesday" | "2" => Ok(Weekday::Tue),
+        "wed" | "weds" | "wednesday" | "3" => Ok(Weekday::Wed),
+        "thu" | "thur" | "thurs" | "thursday" | "4" => Ok(Weekday::Thu),
+        "fri" | "friday" | "5" => Ok(Weekday::Fri),
+        "sat" | "saturday" | "6" => Ok(Weekday::Sat),
+        "sun" | "sunday" | "7" => Ok(Weekday::Sun),
+        _ => anyhow::bail!("unknown weekday {s:?}: use mon..sun or 1..7"),
+    }
 }
 
 pub async fn cmd_cheap(args: CheapArgs, client: &ApiClient) -> Result<()> {
@@ -55,9 +74,15 @@ pub async fn cmd_cheap(args: CheapArgs, client: &ApiClient) -> Result<()> {
         .travel_class(args.class)
         .build()?;
 
-    let results = client
+    let mut results = client
         .cheapest_dates(&config, Months::new(args.months), args.trip_days)
         .await?;
+
+    // Optional client-side weekday filter (the cheap endpoint has none).
+    if let Some(w) = &args.weekday {
+        let wd = parse_weekday(w)?;
+        results.retain(|r| r.departure_date.weekday() == wd);
+    }
 
     if results.is_empty() {
         eprintln!("No dates found.");
@@ -135,5 +160,31 @@ mod tests {
         assert!(
             CheapArgs::try_parse_from(["cheap", "--to", "JFK", "--date", "2026-09-01"]).is_err()
         );
+    }
+
+    #[test]
+    fn weekday_arg_parses() {
+        let args = CheapArgs::try_parse_from([
+            "cheap",
+            "--from",
+            "LUX",
+            "--to",
+            "JFK",
+            "--date",
+            "2026-09-01",
+            "--weekday",
+            "fri",
+        ])
+        .unwrap();
+        assert_eq!(args.weekday.as_deref(), Some("fri"));
+    }
+
+    #[test]
+    fn parse_weekday_accepts_names_and_numbers() {
+        assert_eq!(parse_weekday("fri").unwrap(), Weekday::Fri);
+        assert_eq!(parse_weekday("Friday").unwrap(), Weekday::Fri);
+        assert_eq!(parse_weekday("5").unwrap(), Weekday::Fri);
+        assert_eq!(parse_weekday("sun").unwrap(), Weekday::Sun);
+        assert!(parse_weekday("funday").is_err());
     }
 }

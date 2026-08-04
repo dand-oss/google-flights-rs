@@ -95,7 +95,8 @@ connection airport, `--min-layover MIN` and `--max-layover MIN` rounded up to
 airports and next-day markers.
 
 Key CLI `cheap` flags: `--months N` scan window, `--trip-days N` for round trips of
-exactly N nights. Omit it for one-way date discovery.
+exactly N nights, `--weekday mon..sun` (or 1..7) to keep only departures on that weekday.
+Omit `--trip-days` for one-way date discovery.
 
 ## Workflow
 
@@ -136,8 +137,8 @@ wifi, power, and video flags per leg, are available in `search --format json`.
   a fare. They render as `—` in the table and serialize as `trip_cost: null` in
   JSON. Add `--priced-only` to drop them when you need a clean, fully-priced list
   (for example before sorting or tabulating with jq).
-- `cheap` has no day-of-week filter. Filter its output by weekday when the
-  user wants, say, Friday departures only.
+- `cheap`/`cheapest_dates` filter weekdays client-side with `--weekday`/`weekday`
+  (mon..sun or 1..7); the underlying endpoint has no day-of-week parameter.
 
 ## After Selecting a Flight
 
