@@ -565,8 +565,64 @@ impl ApiClient {
     ))]
     pub async fn request_flights(&self, args: &Config) -> Result<FlightResponseContainer> {
         tracing::info!("Requesting flights");
-        let body = self.fetch_flight_body(args).await?;
+        // Google started requiring the browser-computed
+        // `X-Goog-BatchExecute-Bgr` token on GetShoppingResults in August
+        // 2026.  The initial search-page response contains the same shopping
+        // payload in its `ds:1` data callback and is not BGR-gated, so use the
+        // page bootstrap for ordinary searches instead of sending a POST that
+        // the backend will reject with RPC error 13.
+        let html = self.fetch_flight_search_page(args).await?;
+        let body = extract_flight_batch_response(&html)?;
         create_raw_response_vec(body)
+    }
+
+    /// Fetches the server-rendered Google Flights search page for `args`.
+    ///
+    /// Unlike the private `GetShoppingResults` POST, this navigation request
+    /// does not require the JavaScript-generated BotGuard/BGR header.  Google
+    /// embeds the full shopping response in an `AF_initDataCallback`, which is
+    /// converted back to the existing batchexecute envelope by
+    /// [`extract_flight_batch_response`].
+    async fn fetch_flight_search_page(&self, args: &Config) -> Result<String> {
+        if self.rate_limited.load(Ordering::SeqCst) {
+            return Err(anyhow::Error::new(RateLimitedError));
+        }
+
+        let url = format!(
+            "{}&curr={}&hl={}-{}&gl={}",
+            args.to_flight_url(),
+            self.currency,
+            self.language,
+            self.country.to_uppercase(),
+            self.country.to_uppercase(),
+        );
+
+        let mut headers = base_headers(&self.user_agent);
+        // Navigation headers: the shared base is POST-oriented, so remove the
+        // XHR-only fields and advertise an HTML response.
+        headers.remove(reqwest::header::CONTENT_TYPE);
+        headers.remove(reqwest::header::ORIGIN);
+        headers.remove(HeaderName::from_static("x-same-domain"));
+        headers.insert(
+            reqwest::header::ACCEPT,
+            HeaderValue::from_static(
+                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            ),
+        );
+
+        let _permit = self.rate_limiter.until_n_ready(NonZeroU32::MIN).await;
+        let response = self.client.get(&url).headers(headers).send().await?;
+
+        match response.status() {
+            StatusCode::OK => response.text().await.map_err(Into::into),
+            StatusCode::TOO_MANY_REQUESTS => {
+                self.rate_limited.store(true, Ordering::SeqCst);
+                Err(anyhow::Error::new(RateLimitedError))
+            }
+            status => Err(anyhow::anyhow!(
+                "Google Flights search page returned HTTP {status}"
+            )),
+        }
     }
 
     /// Sends a request to retrieve flight offer data.
@@ -592,11 +648,8 @@ impl ApiClient {
         offer_response::create_raw_response_offer_vec(body)
     }
 
-    /// Builds the request options from a [`Config`] and POSTs to the flights endpoint,
-    /// returning the raw response body.
-    ///
-    /// Shared by [`Self::request_flights`] and [`Self::request_offer`], which differ only
-    /// in how they parse the body.
+    /// Builds the request options from a [`Config`] and POSTs to the flights
+    /// endpoint, returning the raw response body used for booking offers.
     async fn fetch_flight_body(&self, args: &Config) -> Result<String> {
         let date_start = args.departing_date.to_string();
         let date_return = args.return_date.map(|f| f.to_string());
@@ -1271,6 +1324,100 @@ async fn fetch_main_page(user_agent: &str, client: &Client) -> Option<(String, S
     Some((html, cookie_header))
 }
 
+/// Extracts the initial shopping payload from a Google Flights search page and
+/// wraps it in the batchexecute frame consumed by the existing response
+/// parser.
+///
+/// Google emits the payload as strict JSON in the `data` field of the `ds:1`
+/// `AF_initDataCallback`.  The surrounding callback is JavaScript rather than
+/// JSON, so this function locates the field and balances the JSON delimiters
+/// while respecting quoted strings and escapes.
+fn extract_flight_batch_response(html: &str) -> Result<String> {
+    let callback_re = Regex::new(r#"AF_initDataCallback\(\{key:\s*['\"]ds:1['\"]\s*,"#)
+        .map_err(|e| anyhow::anyhow!("failed to compile flight data callback regex: {e}"))?;
+    let callback_start = callback_re.find(html).map(|m| m.end()).ok_or_else(|| {
+        anyhow::anyhow!("Google Flights search page did not contain the ds:1 flight data callback")
+    })?;
+    let callback = &html[callback_start..];
+    let data_field = callback
+        .find("data:")
+        .ok_or_else(|| anyhow::anyhow!("Google Flights ds:1 callback had no data field"))?;
+    let value_start = callback_start
+        + data_field
+        + "data:".len()
+        + callback[data_field + "data:".len()..]
+            .len()
+            .saturating_sub(callback[data_field + "data:".len()..].trim_start().len());
+    let value_end = json_value_end(html, value_start).ok_or_else(|| {
+        anyhow::anyhow!("Google Flights ds:1 callback contained an incomplete JSON value")
+    })?;
+    let data_json = &html[value_start..value_end];
+    let data: serde_json::Value = serde_json::from_str(data_json)
+        .map_err(|e| anyhow::anyhow!("invalid Google Flights ds:1 JSON: {e}"))?;
+    let data_array = data.as_array().ok_or_else(|| {
+        anyhow::anyhow!("Google Flights ds:1 data was not the expected response array")
+    })?;
+    if data_array.len() < 7 {
+        return Err(anyhow::anyhow!(
+            "Google Flights ds:1 response array was unexpectedly short ({})",
+            data_array.len()
+        ));
+    }
+
+    let payload = serde_json::to_string(&data)?;
+    let frame = serde_json::json!([["wrb.fr", null, payload]]);
+    let mut response = String::from(")]}'\n\n");
+    response.push_str(&serde_json::to_string(&frame)?);
+    response.push('\n');
+    Ok(response)
+}
+
+/// Returns the byte offset immediately after one JSON array/object beginning
+/// at `start`. Strings and escaped quote/backslash characters are handled so
+/// bracket-like characters inside airport names or opaque tokens do not affect
+/// balancing.
+fn json_value_end(input: &str, start: usize) -> Option<usize> {
+    let bytes = input.as_bytes();
+    let opening = *bytes.get(start)?;
+    let closing = match opening {
+        b'[' => b']',
+        b'{' => b'}',
+        _ => return None,
+    };
+    let mut stack = vec![closing];
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (offset, byte) in bytes[start + 1..].iter().copied().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match byte {
+            b'"' => in_string = true,
+            b'[' => stack.push(b']'),
+            b'{' => stack.push(b'}'),
+            b']' | b'}' => {
+                if stack.pop()? != byte {
+                    return None;
+                }
+                if stack.is_empty() {
+                    return Some(start + offset + 2);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Extracts the frontend version string from the main-page HTML.
 fn extract_frontend_version(response_body: &str) -> Option<String> {
     // Matches both:
@@ -1331,6 +1478,38 @@ fn replace_f_sid(url: &str, f_sid: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extracts_ds1_flight_payload_into_existing_batch_parser() {
+        let html = concat!(
+            "<script>AF_initDataCallback({key: 'ds:0', hash: '1', data:[[1]], sideChannel: {}});</script>",
+            "<script>AF_initDataCallback({key: 'ds:1', hash: '9', data: ",
+            r#"[null,null,null,null,null,null,["bracket ] in string","escaped \" quote"]]"#,
+            ", sideChannel: {}});</script>",
+        );
+        let batch = extract_flight_batch_response(html).unwrap();
+        let parsed = create_raw_response_vec(batch).unwrap();
+        assert_eq!(parsed.responses.len(), 1);
+    }
+
+    #[test]
+    fn ds1_extractor_fails_loudly_when_google_page_shape_changes() {
+        let err = extract_flight_batch_response(
+            "<script>AF_initDataCallback({key: 'ds:0', data:[[1]]});</script>",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("ds:1 flight data callback"));
+    }
+
+    #[test]
+    fn json_balancer_ignores_delimiters_inside_strings() {
+        let value = r#"[{"name":"O'Hare ] }","nested":[1,{"x":"\"["}]}] trailing"#;
+        let end = json_value_end(value, 0).unwrap();
+        assert_eq!(
+            &value[..end],
+            r#"[{"name":"O'Hare ] }","nested":[1,{"x":"\"["}]}]"#
+        );
+    }
 
     #[test]
     fn extract_f_sid_reads_fdrfje() {

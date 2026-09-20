@@ -106,11 +106,38 @@ fn wrb_frames(body: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Returns the numeric backend error code from a payload-less `wrb.fr` frame.
+///
+/// Google reports request rejection as HTTP 200 with an envelope such as
+/// `[["wrb.fr",null,null,null,null,[13]]]`.  That is not an empty flight
+/// result and must not be silently discarded by the typed frame decoder.
+fn rpc_error_code(frame: &str) -> Option<i64> {
+    let value: serde_json::Value = serde_json::from_str(frame).ok()?;
+    value.as_array()?.iter().find_map(|entry| {
+        let fields = entry.as_array()?;
+        if fields.first()?.as_str()? != "wrb.fr" || !fields.get(2)?.is_null() {
+            return None;
+        }
+        fields.get(5)?.as_array()?.iter().find_map(|v| v.as_i64())
+    })
+}
+
 pub(crate) fn decode_outer_object<T>(body: &str) -> Result<Vec<T>>
 where
     T: for<'a> Deserialize<'a> + GetOuterErrorMessages,
 {
     let lines = wrb_frames(body);
+
+    if let Some(code) = lines.iter().find_map(|frame| rpc_error_code(frame)) {
+        let hint = if code == 13 {
+            "; request rejected (the live shopping RPC requires X-Goog-BatchExecute-Bgr)"
+        } else {
+            "; request rejected"
+        };
+        return Err(anyhow!(
+            "Google Flights backend returned RPC error code {code}{hint}"
+        ));
+    }
 
     let results = lines
         .iter()
@@ -270,7 +297,19 @@ where
 
 #[cfg(test)]
 mod frame_tests {
-    use super::wrb_frames;
+    use super::{decode_outer_object, rpc_error_code, wrb_frames, GetOuterErrorMessages};
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    #[serde(transparent)]
+    struct TestFrame(Vec<serde_json::Value>);
+
+    impl GetOuterErrorMessages for TestFrame {
+        fn get_error_messages(&self) -> Option<Vec<String>> {
+            let _ = &self.0;
+            None
+        }
+    }
 
     #[test]
     fn collects_all_frames_at_irregular_positions() {
@@ -299,5 +338,31 @@ mod frame_tests {
     fn ignores_length_lines_and_end_markers() {
         let body = ")]}'\n5\n[[\"wrb.fr\",\"x\",\"[]\"]]\n[\"di\",12]\n[\"e\",4,null,5]\n";
         assert_eq!(wrb_frames(body).len(), 1);
+    }
+
+    #[test]
+    fn recognizes_payloadless_rpc_error_envelope() {
+        let frame = r#"[["wrb.fr",null,null,null,null,[13]]]"#;
+        assert_eq!(rpc_error_code(frame), Some(13));
+    }
+
+    #[test]
+    fn rpc_error_13_is_not_reported_as_an_empty_result() {
+        let body = concat!(
+            ")]}'\n\n",
+            "39\n",
+            "[[\"wrb.fr\",null,null,null,null,[13]]]\n",
+            "55\n",
+            "[[\"di\",65],[\"af.httprm\",64,\"token\",16]]\n",
+            "25\n",
+            "[[\"e\",4,null,null,131]]\n",
+        );
+        let err = match decode_outer_object::<TestFrame>(body) {
+            Err(err) => err,
+            Ok(_) => panic!("RPC error 13 must not decode as a successful empty response"),
+        };
+        let message = err.to_string();
+        assert!(message.contains("RPC error code 13"));
+        assert!(message.contains("X-Goog-BatchExecute-Bgr"));
     }
 }

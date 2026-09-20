@@ -621,7 +621,13 @@ match client.request_flights(&config).await {
 
 ## Known limitations
 
-`x-goog-batchexecute-bgr` header — computed deep in Google's obfuscated JS from the current time and request payload length — is omitted.  Responses are still valid but may occasionally be less accurate (e.g. missing low-fare calendar data).  Contributions to reverse-engineer the algorithm are welcome.
+Google now rejects unsigned `GetShoppingResults` POSTs with RPC error 13 because
+`x-goog-batchexecute-bgr` is computed inside the web app. Ordinary flight
+searches therefore read the equivalent shopping payload embedded in the
+server-rendered search page, which needs no browser or JavaScript runtime.
+RPC-only features (such as some calendar, graph, explore, and booking-offer
+requests) remain subject to Google's BGR gate; rejection is returned as an
+explicit error instead of being misreported as an empty result.
 
 ---
 
